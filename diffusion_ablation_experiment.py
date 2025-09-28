@@ -32,9 +32,10 @@ def extract_discrete_latents_vqvae(model, data_loader, device):
     """
     model.eval()
     all_codes = []
+    all_labels = []
     
     with torch.no_grad():
-        for x, _ in tqdm(data_loader, desc="Extracting VQVAE Latents"):
+        for x, labels in tqdm(data_loader, desc="Extracting VQVAE Latents"):
             x = x.to(device)
             z = model.encoder(x)
             z = model.pre_quantization_conv(z)
@@ -42,14 +43,17 @@ def extract_discrete_latents_vqvae(model, data_loader, device):
             
             indices = min_encoding_indices.squeeze(1) # [B, 1, H, W] -> [B, H, W]
             all_codes.append(indices.cpu())
+            all_labels.append(labels)
     
-    return torch.cat(all_codes, dim=0)
+    all_codes = torch.cat(all_codes, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
+    
+    return all_codes, all_labels
 
 
 def train_pixelcnn(model, model_name, training_loader, validation_loader, args, device):
     """
     在 VQVAE 的离散隐空间上训练 PixelCNN.
-    (此函数基本不变)
     """
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -61,15 +65,12 @@ def train_pixelcnn(model, model_name, training_loader, validation_loader, args, 
         total_loss = 0.0
         progress_bar = tqdm(training_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         
-        for codes in progress_bar:
-            codes = codes[0].to(device) # Dataloader returns a list
-            
-            # 创建假的标签张量（假设使用CIFAR-10数据集，标签范围0-9）
-            batch_size = codes.shape[0]
-            dummy_labels = torch.randint(0, 10, (batch_size,), device=device)
+        for codes, labels in progress_bar:
+            codes = codes.to(device)
+            labels = labels.to(device)
             
             optimizer.zero_grad()
-            logits = model(codes, dummy_labels) # 传递标签参数
+            logits = model(codes, labels)
             logits = logits.permute(0, 2, 3, 1).contiguous()
             loss = criterion(logits.view(-1, args.n_embeddings), codes.view(-1))
             loss.backward()
@@ -322,14 +323,14 @@ def main():
     vqvae.eval()
     print("Loaded frozen VQVAE model.")
 
-    # 1. 创建离散隐空间数据集
-    discrete_latents = extract_discrete_latents_vqvae(vqvae, training_loader, device)
+    # 1. 创建离散隐空间数据集（包含标签）
+    discrete_latents, labels = extract_discrete_latents_vqvae(vqvae, training_loader, device)
     latent_shape_vqvae = discrete_latents.shape[1:] # e.g. (8, 8) or (32, 32)
     print(f"VQVAE discrete latent dataset created. Shape: {discrete_latents.shape}")
 
     # 2. 训练 PixelCNN 先验模型
     pixelcnn = GatedPixelCNN(input_dim=args.n_embeddings, dim=args.img_dim, n_layers=args.n_layers, n_classes=10).to(device)
-    latent_dataset_vqvae = TensorDataset(discrete_latents)
+    latent_dataset_vqvae = TensorDataset(discrete_latents, labels)
     latent_loader_vqvae = DataLoader(latent_dataset_vqvae, batch_size=args.batch_size, shuffle=True)
     pixelcnn = train_pixelcnn(pixelcnn, "VQVAE", latent_loader_vqvae, None, args, device)
     
