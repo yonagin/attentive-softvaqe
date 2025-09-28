@@ -38,32 +38,32 @@ def extract_latent_codes(model, data_loader, device):
                 # Use the indices directly from the vector quantizer
                 indices = min_encoding_indices.squeeze(1)
                 
-        else:
-            # For SoftVQVAE
-            z_q, attn_weights = model.quantizer(z)
-            
-            # attn_weights 的 shape 可能是 [B*H*W, num_embeddings]
-            # 我们需要把它变回 [B, H*W, num_embeddings]
-            b, c, h, w = z.shape
-            num_embeddings = model.quantizer.num_embeddings
-            
-            # 获取注意力权重，这已经是 softmax 之后的结果了
-            ze_flat = z.permute(0, 2, 3, 1).contiguous().view(-1, model.quantizer.embedding_dim)
-            scores = torch.matmul(ze_flat, model.quantizer.codebook.weight.t())
-            attn_weights = F.softmax(scores / model.quantizer.temperature, dim=1) # shape: [B*H*W, K]
+            else:
+                # For SoftVQVAE
+                z_q, attn_weights = model.quantizer(z)
+                
+                # attn_weights 的 shape 可能是 [B*H*W, num_embeddings]
+                # 我们需要把它变回 [B, H*W, num_embeddings]
+                b, c, h, w = z.shape
+                num_embeddings = model.quantizer.num_embeddings
+                
+                # 获取注意力权重，这已经是 softmax 之后的结果了
+                ze_flat = z.permute(0, 2, 3, 1).contiguous().view(-1, model.quantizer.embedding_dim)
+                scores = torch.matmul(ze_flat, model.quantizer.codebook.weight.t())
+                attn_weights = F.softmax(scores / model.quantizer.temperature, dim=1) # shape: [B*H*W, K]
 
-            # --- 核心改动在这里 ---
-            # 不要用 argmin，用 torch.multinomial 进行采样
-            # torch.multinomial 会根据每行的权重（概率）进行采样，返回采样到的索引
-            # num_samples=1 表示每个位置只采样一个索引
-            indices_flat = torch.multinomial(attn_weights, num_samples=1) # shape: [B*H*W, 1]
-            
-            # Reshape indices to match latent spatial dimensions
-            latent_shape = z.shape[2:]
-            indices = indices_flat.view(x.shape[0], *latent_shape) # shape: [B, H, W]
-            
-            all_codes.append(indices.cpu())
-            all_labels.append(labels)
+                # --- 核心改动在这里 ---
+                # 不要用 argmin，用 torch.multinomial 进行采样
+                # torch.multinomial 会根据每行的权重（概率）进行采样，返回采样到的索引
+                # num_samples=1 表示每个位置只采样一个索引
+                indices_flat = torch.multinomial(attn_weights, num_samples=1) # shape: [B*H*W, 1]
+                
+                # Reshape indices to match latent spatial dimensions
+                latent_shape = z.shape[2:]
+                indices = indices_flat.view(x.shape[0], *latent_shape) # shape: [B, H, W]
+                
+                all_codes.append(indices.cpu())
+                all_labels.append(labels)
     
     all_codes = torch.cat(all_codes, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
