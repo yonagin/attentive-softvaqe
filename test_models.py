@@ -53,16 +53,17 @@ def test_models():
     print(f"VQVAE - Output shapes match: {x_hat.shape == x_hat_loss.shape}")
     
     print("\nTesting SoftVQVAE...")
-    # Test forward pass
+    # Test forward pass without loss
     x_hat = soft_vqvae(x)
     print(f"SoftVQVAE - Input shape: {x.shape}")
     print(f"SoftVQVAE - Output shape: {x_hat.shape}")
     
-    # Test loss computation
-    total_loss, recon_loss, codebook_loss = soft_vqvae.loss(x)
+    # Test forward pass with loss (using new interface)
+    total_loss, recon_loss, codebook_loss, x_hat_loss = soft_vqvae(x, return_loss=True)
     print(f"SoftVQVAE - Total loss: {total_loss.item():.4f}")
     print(f"SoftVQVAE - Recon loss: {recon_loss.item():.4f}")
     print(f"SoftVQVAE - Codebook loss: {codebook_loss.item():.4f}")
+    print(f"SoftVQVAE - Output shapes match: {x_hat.shape == x_hat_loss.shape}")
     
     # Test reconstruction
     x_recon_vqvae = vqvae.reconstruct(x)

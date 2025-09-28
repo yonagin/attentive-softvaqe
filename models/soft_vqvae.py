@@ -23,30 +23,27 @@ class SoftVQVAE(nn.Module):
         self.decoder = Decoder(embedding_dim, h_dim, n_res_layers, res_h_dim)
         self.beta = beta
 
-    def loss(self, x):
-        ze = self.encoder(x)
-        ze = self.pre_quantization_conv(ze)
-        zq, _ = self.quantizer(ze)
-        # 使用ze.detach()来阻止梯度流向量化编码器
-        codebook_loss = F.mse_loss(ze.detach(), zq)
-        
-        x_recon = self.decoder(zq)
-        
-        recon_loss = F.mse_loss(x_recon, x)
-        
-        total_loss = recon_loss + self.beta * codebook_loss
-        
-        return (total_loss, recon_loss, codebook_loss)
-    
-    def forward(self, x):
+    def forward(self, x, return_loss=False):
         """
-        Forward pass
+        Forward pass with optional loss computation
+        
+        Args:
+            x: input tensor
+            return_loss: whether to return loss components
         """
         ze = self.encoder(x)
         ze = self.pre_quantization_conv(ze)
         zq, _ = self.quantizer(ze)
         x_hat = self.decoder(zq)
-        return x_hat
+        
+        if return_loss:
+            # 使用ze.detach()来阻止梯度流向量化编码器
+            codebook_loss = F.mse_loss(ze.detach(), zq)
+            recon_loss = F.mse_loss(x_hat, x)
+            total_loss = recon_loss + self.beta * codebook_loss
+            return total_loss, recon_loss, codebook_loss, x_hat
+        else:
+            return x_hat
     
     @torch.no_grad()
     def reconstruct(self, x):
@@ -62,11 +59,10 @@ class SoftVQVAE(nn.Module):
 
 if __name__ == "__main__":
     # Test the model
-    encoder = Encoder(3, 128, 2, 32)
-    decoder = Decoder(64, 128, 2, 32)
     model = SoftVQVAE(
-        encoder=encoder,
-        decoder=decoder,
+        h_dim=128,
+        res_h_dim=32,
+        n_res_layers=2,
         num_embeddings=512,
         embedding_dim=64,
         beta=0.25,
@@ -75,10 +71,15 @@ if __name__ == "__main__":
     
     # Random input
     x = torch.randn(2, 3, 32, 32)
+    
+    # Test forward pass without loss
     x_hat = model(x)
-    total_loss, recon_loss, codebook_loss = model.loss(x)
     print(f"Input shape: {x.shape}")
     print(f"Output shape: {x_hat.shape}")
+    
+    # Test forward pass with loss
+    total_loss, recon_loss, codebook_loss, x_hat_loss = model(x, return_loss=True)
     print(f"Total loss: {total_loss.item():.4f}")
     print(f"Reconstruction loss: {recon_loss.item():.4f}")
     print(f"Codebook loss: {codebook_loss.item():.4f}")
+    print(f"Output shapes match: {x_hat.shape == x_hat_loss.shape}")

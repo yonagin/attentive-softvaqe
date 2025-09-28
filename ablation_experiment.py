@@ -44,8 +44,8 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
         
         # Use the appropriate loss computation method based on model type
         if hasattr(model, 'loss'):
-            # For SoftVQVAE with new interface
-            total_loss, recon_loss, codebook_loss = model.loss(x)
+            # For SoftVQVAE with new interface (using forward method with return_loss=True)
+            total_loss, recon_loss, codebook_loss, _ = model(x, return_loss=True)
             # For compatibility with existing code, set embedding_loss to codebook_loss
             embedding_loss = codebook_loss
             # SoftVQVAE doesn't compute perplexity, so we don't track it
