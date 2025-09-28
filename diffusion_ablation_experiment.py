@@ -136,7 +136,8 @@ def generate_with_pixelcnn(pixelcnn_model, vqvae_model, num_samples, latent_shap
 
 def extract_continuous_latents_softvqvae(model, data_loader, device, save_dir=None):
     """
-    专门为 SoftVQVAE 提取进入量化层的隐向量 z_e，并进行标准化处理。
+    专门为 SoftVQVAE 提取量化后的隐向量 z_q，并进行标准化处理。
+    zq空间是结构化的，更适合训练扩散模型。
     """
     model.eval()
     all_latents = []
@@ -146,8 +147,9 @@ def extract_continuous_latents_softvqvae(model, data_loader, device, save_dir=No
             x = x.to(device)
             z_e = model.encoder(x)
             z_e = model.pre_quantization_conv(z_e)
-            # 提取进入量化层的潜变量 z_e，而不是量化后的 z_q
-            all_latents.append(z_e.cpu())
+            # 提取量化后的潜变量 z_q，而不是量化前的 z_e
+            z_q, _ = model.quantizer(z_e)
+            all_latents.append(z_q.cpu())
     
     all_latents = torch.cat(all_latents, dim=0)
     
@@ -255,7 +257,8 @@ def train_diffusion_model(latent_dataset, save_path, args):
 
 def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, device, z_stats_path=None):
     """
-    使用扩散模型生成隐向量, 并用 SoftVQVAE 模型进行量化和解码.
+    使用扩散模型生成隐向量, 并用 SoftVQVAE 模型进行解码.
+    扩散模型在zq空间上训练，直接生成zq空间数据。
     如果提供了标准化参数路径，则进行逆标准化处理。
     """
     softvqvae_model.eval()
@@ -271,7 +274,7 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, de
         std = None
         print("No latent space statistics found. Using generated latents as-is.")
     
-    # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成去噪后的隐向量 z_e
+    # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成去噪后的隐向量 z_q
     # 使用正确的pipeline调用方式
     with torch.no_grad():
         output = diffusion_pipeline(
@@ -282,35 +285,31 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, de
         
         # 确保返回的是PyTorch张量
         if hasattr(output, 'images'):
-            generated_z_e = output.images
+            generated_z_q = output.images
         else:
-            generated_z_e = output
+            generated_z_q = output
         
         # 如果返回的是numpy数组，转换为PyTorch张量
-        if isinstance(generated_z_e, np.ndarray):
-            generated_z_e = torch.from_numpy(generated_z_e)
+        if isinstance(generated_z_q, np.ndarray):
+            generated_z_q = torch.from_numpy(generated_z_q)
     
     # 确保张量在正确的设备上
-    generated_z_e = generated_z_e.to(device)
+    generated_z_q = generated_z_q.to(device)
     
     # 检查并调整维度顺序
-    if len(generated_z_e.shape) == 4:
+    if len(generated_z_q.shape) == 4:
         # 如果维度是 [batch_size, height, width, channels]，需要转换为 [batch_size, channels, height, width]
-        if generated_z_e.shape[-1] == 64:  # channels维度在最后
-            generated_z_e = generated_z_e.permute(0, 3, 1, 2)
+        if generated_z_q.shape[-1] == 64:  # channels维度在最后
+            generated_z_q = generated_z_q.permute(0, 3, 1, 2)
     
     # 2. 如果存在标准化参数，进行逆标准化
     if mean is not None and std is not None:
-        generated_z_e = generated_z_e * std + mean
+        generated_z_q = generated_z_q * std + mean
         print("Applied denormalization to generated latents.")
     
-    # 3. 将生成的 z_e 输入量化层得到 z_q
+    # 3. 将生成的 z_q 直接输入解码器得到最终图像
     with torch.no_grad():
-        z_q, _ = softvqvae_model.quantizer(generated_z_e)
-        
-    # 4. 将量化后的 z_q 输入解码器得到最终图像
-    with torch.no_grad():
-        generated_images = softvqvae_model.decoder(z_q)
+        generated_images = softvqvae_model.decoder(generated_z_q)
         
     return generated_images
 
