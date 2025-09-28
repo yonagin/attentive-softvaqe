@@ -27,9 +27,6 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 # ==============================================================================
 
 def extract_discrete_latents_vqvae(model, data_loader, device):
-   """
-    Extract latent codes from VQVAE model
-    """
     model.eval()
     all_codes = []
     all_labels = []
