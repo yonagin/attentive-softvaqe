@@ -178,18 +178,27 @@ def train_diffusion_model(latent_dataset, save_path, args):
 
     # 2. 配置 U-Net 模型
     # 对于8x8的小尺寸输入，需要减少下采样块的数量
+    if H <= 8:
+        print("Latent space is small. Using a shallow U-Net.")
+        # 最多下采样一次
+        down_blocks = ("DownBlock2D",)
+        up_blocks = ("UpBlock2D",)
+        block_channels = (128, 256) # 减少层数，但可以增加宽度
+    else:
+        # 默认配置
+        down_blocks = ("DownBlock2D", "DownBlock2D")
+        up_blocks = ("UpBlock2D", "UpBlock2D")
+        block_channels = (64, 128)
+
+
     model = UNet2DModel(
         sample_size=H,
         in_channels=C,
         out_channels=C,
         layers_per_block=2,
-        block_out_channels=(64, 128), # 减少通道层级以适应小尺寸输入
-        down_block_types=(
-            "DownBlock2D", "DownBlock2D",
-        ),
-        up_block_types=(
-            "UpBlock2D", "UpBlock2D"
-        ),
+        block_out_channels=block_channels, 
+        down_block_types=down_blocks,
+        up_block_types=up_blocks,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)

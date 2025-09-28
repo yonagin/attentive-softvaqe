@@ -36,7 +36,7 @@ class SoftVQVAE(nn.Module):
         ze = self.pre_quantization_conv(ze)
         # 添加噪声到量化后的潜向量
         if noise_std > 0.0:
-            ze = ze + torch.randn_like(zq) * noise_std
+            ze = ze + torch.randn_like(ze) * noise_std
 
         zq, _ = self.quantizer(ze)
         
