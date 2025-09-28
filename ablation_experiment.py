@@ -61,7 +61,8 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
         if perplexity is not None:
             results["perplexities"].append(perplexity.cpu().detach().numpy())
         else:
-            results["perplexities"].append(0.0)  # Placeholder for SoftVQVAE
+            # SoftVQVAE doesn't compute perplexity, so we don't track it
+            results["perplexities"].append(None)
         results["loss_vals"].append(total_loss.cpu().detach().numpy())
         results["embedding_losses"].append(embedding_loss.cpu().detach().numpy())
         results["n_updates"] = i
@@ -83,10 +84,17 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
             model.train()
         
         if i % args.log_interval == 0:
+            # Filter out None values for perplexity (SoftVQVAE case)
+            recent_perplexities = [p for p in results["perplexities"][-args.log_interval:] if p is not None]
+            if recent_perplexities:
+                perplexity_str = f'Perplexity: {np.mean(recent_perplexities):.4f}'
+            else:
+                perplexity_str = ''
+            
             print(f'{model_name} - Update #{i}, '
                   f'Recon Error: {np.mean(results["recon_errors"][-args.log_interval:]):.4f}, '
-                  f'Loss: {np.mean(results["loss_vals"][-args.log_interval:]):.4f}, '
-                  f'Perplexity: {np.mean(results["perplexities"][-args.log_interval:]):.4f}')
+                  f'Loss: {np.mean(results["loss_vals"][-args.log_interval:]):.4f}'
+                  + (f', {perplexity_str}' if perplexity_str else ''))
     
     return results
 
