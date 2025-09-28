@@ -134,9 +134,9 @@ def generate_with_pixelcnn(pixelcnn_model, vqvae_model, num_samples, latent_shap
 # 2. SoftVQVAE + Diffusion Model 部分 (全新实现)
 # ==============================================================================
 
-def extract_continuous_latents_softvqvae(model, data_loader, device):
+def extract_continuous_latents_softvqvae(model, data_loader, device, save_dir=None):
     """
-    专门为 SoftVQVAE 提取进入量化层的隐向量 z_e.
+    专门为 SoftVQVAE 提取进入量化层的隐向量 z_e，并进行标准化处理。
     """
     model.eval()
     all_latents = []
@@ -146,16 +146,28 @@ def extract_continuous_latents_softvqvae(model, data_loader, device):
             x = x.to(device)
             z_e = model.encoder(x)
             z_e = model.pre_quantization_conv(z_e)
-            z_e = F.tanh(z_e)
             # 提取进入量化层的潜变量 z_e，而不是量化后的 z_q
             all_latents.append(z_e.cpu())
-            
-    return torch.cat(all_latents, dim=0)
+    
+    all_latents = torch.cat(all_latents, dim=0)
+    
+    # 对隐空间进行标准化处理
+    mean = torch.mean(all_latents, dim=(0, 2, 3), keepdim=True)
+    std = torch.std(all_latents, dim=(0, 2, 3), keepdim=True)
+    
+    # 保存标准化参数
+    if save_dir is not None:
+        torch.save({'mean': mean, 'std': std}, os.path.join(save_dir, 'z_stats.pth'))
+        print(f"Saved latent space statistics to {os.path.join(save_dir, 'z_stats.pth')}")
+    
+    standardized_latents = (all_latents - mean) / std
+    
+    return standardized_latents, mean, std
 
 
 def train_diffusion_model(latent_dataset, save_path, args):
     """
-    在 SoftVQVAE 的连续隐空间上训练扩散模型.
+    在 SoftVQVAE 的标准化连续隐空间上训练扩散模型.
     """
     # 1. 获取隐空间维度信息
     latent_shape = latent_dataset.shape
@@ -196,7 +208,7 @@ def train_diffusion_model(latent_dataset, save_path, args):
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # 6. 训练循环
-    print(f"--- Training Diffusion Model on SoftVQVAE latent space ---")
+    print(f"--- Training Diffusion Model on Standardized SoftVQVAE latent space ---")
     for epoch in range(args.diffusion_epochs):
         model.train()
         total_loss = 0.0
@@ -241,11 +253,23 @@ def train_diffusion_model(latent_dataset, save_path, args):
     return pipeline
 
 
-def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, device):
+def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, device, z_stats_path=None):
     """
     使用扩散模型生成隐向量, 并用 SoftVQVAE 模型进行量化和解码.
+    如果提供了标准化参数路径，则进行逆标准化处理。
     """
     softvqvae_model.eval()
+    
+    # 加载标准化参数（如果存在）
+    if z_stats_path is not None and os.path.exists(z_stats_path):
+        z_stats = torch.load(z_stats_path, map_location=device)
+        mean = z_stats['mean'].to(device)
+        std = z_stats['std'].to(device)
+        print("Loaded latent space statistics for denormalization.")
+    else:
+        mean = None
+        std = None
+        print("No latent space statistics found. Using generated latents as-is.")
     
     # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成去噪后的隐向量 z_e
     # 使用正确的pipeline调用方式
@@ -275,11 +299,16 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, de
         if generated_z_e.shape[-1] == 64:  # channels维度在最后
             generated_z_e = generated_z_e.permute(0, 3, 1, 2)
     
-    # 2. 将生成的 z_e 输入量化层得到 z_q
+    # 2. 如果存在标准化参数，进行逆标准化
+    if mean is not None and std is not None:
+        generated_z_e = generated_z_e * std + mean
+        print("Applied denormalization to generated latents.")
+    
+    # 3. 将生成的 z_e 输入量化层得到 z_q
     with torch.no_grad():
         z_q, _ = softvqvae_model.quantizer(generated_z_e)
         
-    # 3. 将量化后的 z_q 输入解码器得到最终图像
+    # 4. 将量化后的 z_q 输入解码器得到最终图像
     with torch.no_grad():
         generated_images = softvqvae_model.decoder(z_q)
         
@@ -454,16 +483,18 @@ def main():
     softvqvae.eval()
     print("Loaded frozen SoftVQVAE model.")
     
-    # 1. 创建连续隐空间数据集
-    continuous_latents = extract_continuous_latents_softvqvae(softvqvae, training_loader, device)
-    print(f"SoftVQVAE continuous latent dataset created. Shape: {continuous_latents.shape}")
+    # 1. 创建连续隐空间数据集并进行标准化
+    continuous_latents, mean, std = extract_continuous_latents_softvqvae(softvqvae, training_loader, device, save_dir)
+    print(f"SoftVQVAE standardized continuous latent dataset created. Shape: {continuous_latents.shape}")
+    print(f"Latent space statistics - Mean: {mean.mean().item():.4f}, Std: {std.mean().item():.4f}")
 
     # 2. 训练 Diffusion Model 先验模型
     diffusion_save_path = os.path.join(save_dir, "diffusion_pipeline_on_softvqvae")
     diffusion_pipeline = train_diffusion_model(continuous_latents, diffusion_save_path, args)
     
-    # 3. 生成新图片
-    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae, args.num_samples_to_generate, device)
+    # 3. 生成新图片（使用标准化参数进行逆标准化）
+    z_stats_path = os.path.join(save_dir, 'z_stats.pth')
+    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae, args.num_samples_to_generate, device, z_stats_path)
     save_image(generated_images_softvqvae.data.cpu(), os.path.join(save_dir, 'generated_by_diffusion.png'), nrow=8, normalize=True)
     print("Generated images from SoftVQVAE+Diffusion pipeline and saved.")
 
