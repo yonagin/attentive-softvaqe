@@ -45,7 +45,9 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
         # Use the appropriate loss computation method based on model type
         if isinstance(model, SoftVQVAE):
             # For SoftVQVAE with new interface (using forward method with return_loss=True)
-            total_loss, recon_loss, codebook_loss, _ = model(x, return_loss=True)
+            # 添加噪声注入，如果指定了噪声标准差
+            noise_std = getattr(args, 'noise_std', 0.0)
+            total_loss, recon_loss, codebook_loss, _ = model(x, return_loss=True, noise_std=noise_std)
             # For compatibility with existing code, set embedding_loss to codebook_loss
             embedding_loss = codebook_loss
             # SoftVQVAE doesn't compute perplexity, so we don't track it
@@ -345,6 +347,7 @@ def main():
     parser.add_argument("--log_interval", type=int, default=50)
     parser.add_argument("--dataset", type=str, default='CIFAR10')
     parser.add_argument("--soft_temperature", type=float, default=1.0)
+    parser.add_argument("--noise_std", type=float, default=0.0, help="Standard deviation of Gaussian noise to add to quantized latent vectors for SoftVQVAE")
     
     # Experiment settings
     parser.add_argument("--save_dir", type=str, default='ablation_results')

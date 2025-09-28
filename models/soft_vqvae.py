@@ -23,17 +23,23 @@ class SoftVQVAE(nn.Module):
         self.decoder = Decoder(embedding_dim, h_dim, n_res_layers, res_h_dim)
         self.beta = beta
 
-    def forward(self, x, return_loss=False):
+    def forward(self, x, return_loss=False, noise_std=0.0):
         """
-        Forward pass with optional loss computation
+        Forward pass with optional loss computation and noise injection
         
         Args:
             x: input tensor
             return_loss: whether to return loss components
+            noise_std: standard deviation of Gaussian noise to add to quantized latent vectors
         """
         ze = self.encoder(x)
         ze = self.pre_quantization_conv(ze)
         zq, _ = self.quantizer(ze)
+        
+        # 添加噪声到量化后的潜向量
+        if noise_std > 0.0:
+            zq = zq + torch.randn_like(zq) * noise_std
+        
         x_hat = self.decoder(zq)
         
         if return_loss:
@@ -46,13 +52,22 @@ class SoftVQVAE(nn.Module):
             return x_hat
     
     @torch.no_grad()
-    def reconstruct(self, x):
+    def reconstruct(self, x, noise_std=0.0):
         """
-        Reconstruct input
+        Reconstruct input with optional noise injection
+        
+        Args:
+            x: input tensor
+            noise_std: standard deviation of Gaussian noise to add to quantized latent vectors
         """
         ze = self.encoder(x)
         ze = self.pre_quantization_conv(ze)
         zq, _ = self.quantizer(ze)
+        
+        # 添加噪声到量化后的潜向量
+        if noise_std > 0.0:
+            zq = zq + torch.randn_like(zq) * noise_std
+        
         x_hat = self.decoder(zq)
         return x_hat
 
