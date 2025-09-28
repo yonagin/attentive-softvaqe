@@ -145,18 +145,18 @@ def train_diffusion_model(latent_dataset, save_path, args):
     print(f"Latent dataset shape: {latent_shape}. Training U-Net with sample_size={H}, in_channels={C}.")
 
     # 2. 配置 U-Net 模型
-    # 这些参数可以根据你的隐空间大小和复杂度进行调整
+    # 对于8x8的小尺寸输入，需要减少下采样块的数量
     model = UNet2DModel(
         sample_size=H,
         in_channels=C,
         out_channels=C,
         layers_per_block=2,
-        block_out_channels=(64, 64, 128, 128, 256), # 通道数可以调整
+        block_out_channels=(64, 128, 256), # 减少通道层级以适应小尺寸输入
         down_block_types=(
-            "DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D", "AttnDownBlock2D"
+            "DownBlock2D", "DownBlock2D", "AttnDownBlock2D"
         ),
         up_block_types=(
-            "AttnUpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D"
+            "AttnUpBlock2D", "UpBlock2D", "UpBlock2D"
         ),
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
