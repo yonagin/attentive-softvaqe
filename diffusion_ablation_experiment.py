@@ -146,7 +146,7 @@ def extract_continuous_latents_softvqvae(model, data_loader, device):
             x = x.to(device)
             z_e = model.encoder(x)
             z_e = model.pre_quantization_conv(z_e)
-            ze = F.tanh(ze)
+            z_e = F.tanh(z_e)
             # 提取进入量化层的潜变量 z_e，而不是量化后的 z_q
             all_latents.append(z_e.cpu())
             
