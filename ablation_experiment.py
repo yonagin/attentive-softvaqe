@@ -167,7 +167,7 @@ def calculate_fid(real_imgs, fake_imgs, device):
         features = []
         with torch.no_grad():
             for i in range(0, len(imgs), 32):  # Process in batches
-                batch = imgs[i:i+32]
+                batch = imgs[i:i+32].to(device)  # Move batch to the same device as VGG
                 # Normalize for VGG
                 mean = batch.new_tensor([0.485, 0.456, 0.406]).view(-1, 1, 1)
                 std = batch.new_tensor([0.229, 0.224, 0.225]).view(-1, 1, 1)
