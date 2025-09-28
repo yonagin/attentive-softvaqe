@@ -25,46 +25,6 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 # pip install torchmetrics
 from torchmetrics.image import StructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from scipy import linalg
-from torchvision.models import vgg16
-
-
-def calculate_fid(real_images, generated_images, device):
-    """
-    计算FID (Fréchet Inception Distance) 指标
-    """
-    # 使用VGG16特征提取器
-    vgg = vgg16(pretrained=True).features.to(device)
-    vgg.eval()
-    
-    # 提取真实图像和生成图像的特征
-    with torch.no_grad():
-        # 归一化图像到[0,1]范围并调整大小到224x224
-        real_images_normalized = F.interpolate(real_images, size=(224, 224), mode='bilinear', align_corners=False)
-        generated_images_normalized = F.interpolate(generated_images, size=(224, 224), mode='bilinear', align_corners=False)
-        
-        # 提取特征
-        real_features = vgg(real_images_normalized).view(real_images.size(0), -1)
-        generated_features = vgg(generated_images_normalized).view(generated_images.size(0), -1)
-    
-    # 计算特征的均值和协方差
-    mu_real = real_features.mean(dim=0)
-    mu_generated = generated_features.mean(dim=0)
-    
-    sigma_real = torch.cov(real_features.T)
-    sigma_generated = torch.cov(generated_features.T)
-    
-    # 计算FID
-    diff = mu_real - mu_generated
-    covmean = linalg.sqrtm(sigma_real.cpu().numpy().dot(sigma_generated.cpu().numpy()))
-    
-    # 检查复数部分
-    if np.iscomplexobj(covmean):
-        covmean = covmean.real
-    
-    fid = diff.dot(diff) + torch.trace(sigma_real + sigma_generated - 2 * torch.tensor(covmean, device=device))
-    
-    return fid.item()
 
 
 # ==============================================================================
@@ -325,13 +285,9 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, de
     return generated_images
 
 
-def evaluate_generated_image_quality(real_images, generated_images, device):
+def evaluate_image_quality(real_images, generated_images, device):
     """
-    评估生成图像的质量（适用于生成模型，如Diffusion）
-    
-    注意：对于生成模型，MSE、PSNR、SSIM等像素级指标不适用，
-    因为生成的图像与真实图像没有一一对应关系。
-    这里主要使用LPIPS等感知指标，并添加FID等分布级指标。
+    评估生成图像的质量
     """
     # 确保图像在正确的设备上
     real_images = real_images.to(device)
@@ -356,54 +312,17 @@ def evaluate_generated_image_quality(real_images, generated_images, device):
     print(f"LPIPS generated images range: [{generated_images_lpips.min().item():.4f}, {generated_images_lpips.max().item():.4f}]")
     
     # 初始化评估指标
-    lpips = LearnedPerceptualImagePatchSimilarity(net_type='vgg').to(device)
-    
-    # 计算LPIPS（感知相似性指标，适用于生成模型）
-    lpips_score = lpips(generated_images_lpips, real_images_lpips)
-    
-    # 计算FID（分布相似性指标）
-    fid_score = calculate_fid(real_images, generated_images, device)
-    
-    # 注意：对于生成模型，MSE、PSNR、SSIM等像素级指标不适用
-    # 因为它们要求图像有对应关系，而生成模型产生的是新图像
-    
-    return {
-        'fid': fid_score,
-        'lpips': lpips_score.item()
-    }
-
-
-def evaluate_reconstructed_image_quality(real_images, reconstructed_images, device):
-    """
-    评估重建图像的质量（适用于重建任务，如VQVAE重建）
-    
-    这里可以使用MSE、PSNR、SSIM等像素级指标，
-    因为重建图像与原始图像有对应关系。
-    """
-    # 确保图像在正确的设备上
-    real_images = real_images.to(device)
-    reconstructed_images = reconstructed_images.to(device)
-    
-    # 归一化到[0, 1]范围
-    real_images_normalized = (real_images - real_images.min()) / (real_images.max() - real_images.min())
-    reconstructed_images_normalized = (reconstructed_images - reconstructed_images.min()) / (reconstructed_images.max() - reconstructed_images.min())
-    
-    # 归一化到[-1, 1]用于LPIPS
-    real_images_lpips = real_images_normalized * 2 - 1
-    reconstructed_images_lpips = reconstructed_images_normalized * 2 - 1
-    
-    # 初始化评估指标
     ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
     psnr = PeakSignalNoiseRatio(data_range=1.0).to(device)
     lpips = LearnedPerceptualImagePatchSimilarity(net_type='vgg').to(device)
     
     # 计算指标
-    ssim_score = ssim(reconstructed_images_normalized, real_images_normalized)
-    psnr_score = psnr(reconstructed_images_normalized, real_images_normalized)
-    lpips_score = lpips(reconstructed_images_lpips, real_images_lpips)
+    ssim_score = ssim(generated_images_normalized, real_images_normalized)
+    psnr_score = psnr(generated_images_normalized, real_images_normalized)
+    lpips_score = lpips(generated_images_lpips, real_images_lpips)
     
-    # 计算MSE（适用于重建任务）
-    mse = F.mse_loss(reconstructed_images, real_images)
+    # 计算MSE（使用原始图像）
+    mse = F.mse_loss(generated_images, real_images)
     
     return {
         'mse': mse.item(),
@@ -511,14 +430,16 @@ def main():
     # 4. 评估 VQVAE+PixelCNN 生成图像质量
     print("Evaluating VQVAE+PixelCNN image quality...")
     real_images_vqvae = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
-    vqvae_quality = evaluate_generated_image_quality(real_images_vqvae, generated_images_vqvae, device)
+    vqvae_quality = evaluate_image_quality(real_images_vqvae, generated_images_vqvae, device)
     
     # 保存评估结果
     with open(os.path.join(save_dir, 'vqvae_pixelcnn_quality.json'), 'w') as f:
         json.dump(vqvae_quality, f, indent=2)
     
     print("VQVAE+PixelCNN Quality Metrics:")
-    print(f"  FID: {vqvae_quality['fid']:.2f}")
+    print(f"  MSE: {vqvae_quality['mse']:.6f}")
+    print(f"  PSNR: {vqvae_quality['psnr']:.2f} dB")
+    print(f"  SSIM: {vqvae_quality['ssim']:.4f}")
     print(f"  LPIPS: {vqvae_quality['lpips']:.4f}")
 
     # --- Pipeline 2: SoftVQVAE + Diffusion Model ---
@@ -548,14 +469,16 @@ def main():
     # 4. 评估 SoftVQVAE+Diffusion 生成图像质量
     print("Evaluating SoftVQVAE+Diffusion image quality...")
     real_images_softvqvae = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
-    softvqvae_quality = evaluate_generated_image_quality(real_images_softvqvae, generated_images_softvqvae, device)
+    softvqvae_quality = evaluate_image_quality(real_images_softvqvae, generated_images_softvqvae, device)
     
     # 保存评估结果
     with open(os.path.join(save_dir, 'softvqvae_diffusion_quality.json'), 'w') as f:
         json.dump(softvqvae_quality, f, indent=2)
     
     print("SoftVQVAE+Diffusion Quality Metrics:")
-    print(f"  FID: {softvqvae_quality['fid']:.2f}")
+    print(f"  MSE: {softvqvae_quality['mse']:.6f}")
+    print(f"  PSNR: {softvqvae_quality['psnr']:.2f} dB")
+    print(f"  SSIM: {softvqvae_quality['ssim']:.4f}")
     print(f"  LPIPS: {softvqvae_quality['lpips']:.4f}")
 
     # 比较两个pipeline的结果
@@ -563,7 +486,9 @@ def main():
     print("=== Pipeline Comparison ===")
     print("="*50)
     print("VQVAE+PixelCNN vs SoftVQVAE+Diffusion:")
-    print(f"FID:     {vqvae_quality['fid']:.2f} vs {softvqvae_quality['fid']:.2f}")
+    print(f"MSE:     {vqvae_quality['mse']:.6f} vs {softvqvae_quality['mse']:.6f}")
+    print(f"PSNR:    {vqvae_quality['psnr']:.2f} dB vs {softvqvae_quality['psnr']:.2f} dB")
+    print(f"SSIM:    {vqvae_quality['ssim']:.4f} vs {softvqvae_quality['ssim']:.4f}")
     print(f"LPIPS:   {vqvae_quality['lpips']:.4f} vs {softvqvae_quality['lpips']:.4f}")
 
     print("\n" + "="*50)
