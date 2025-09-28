@@ -392,14 +392,31 @@ def main():
         # Convert numpy arrays to lists for JSON serialization
         serializable_results = {}
         for model_name, results in results_dict.items():
-            serializable_results[model_name] = {
-                k: (v.tolist() if isinstance(v, np.ndarray) else v) 
-                for k, v in results.items()
-            }
+            serializable_results[model_name] = {}
+            for k, v in results.items():
+                if isinstance(v, np.ndarray):
+                    serializable_results[model_name][k] = v.tolist()
+                elif isinstance(v, list) and len(v) > 0 and isinstance(v[0], np.ndarray):
+                    # Handle lists containing numpy arrays
+                    serializable_results[model_name][k] = [item.tolist() if isinstance(item, np.ndarray) else item for item in v]
+                elif isinstance(v, list) and len(v) > 0 and isinstance(v[0], (np.floating, np.integer)):
+                    # Handle lists containing numpy scalars
+                    serializable_results[model_name][k] = [float(item) if isinstance(item, np.floating) else int(item) for item in v]
+                else:
+                    serializable_results[model_name][k] = v
         json.dump(serializable_results, f, indent=2)
     
     with open(os.path.join(save_dir, 'evaluation_results.json'), 'w') as f:
-        json.dump(evaluation_results, f, indent=2)
+        # Convert evaluation results (which contain numpy floats)
+        serializable_eval_results = {}
+        for model_name, results in evaluation_results.items():
+            serializable_eval_results[model_name] = {}
+            for k, v in results.items():
+                if isinstance(v, (np.floating, np.integer)):
+                    serializable_eval_results[model_name][k] = float(v) if isinstance(v, np.floating) else int(v)
+                else:
+                    serializable_eval_results[model_name][k] = v
+        json.dump(serializable_eval_results, f, indent=2)
     
     # Generate comparison plots
     print("Generating comparison plots...")
