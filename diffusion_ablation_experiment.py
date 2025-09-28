@@ -287,7 +287,32 @@ def main():
     training_data, _, training_loader, _, _ = utils.load_data_and_data_loaders(
         args.dataset, args.batch_size, num_workers=4)
 
-    # --- Pipeline 1: VQVAE + PixelCNN ---
+
+    # --- Pipeline 2: SoftVQVAE + Diffusion Model ---
+    print("\n" + "="*50)
+    print("=== Pipeline 2: SoftVQVAE + Diffusion Model ===")
+    print("="*50)
+
+    # 加载冻结的 SoftVQVAE 模型
+    softvqvae = SoftVQVAE(in_channels=3, h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25,temperature=0.5).to(device)
+    softvqvae.load_state_dict(torch.load(args.softvqvae_model_path, map_location=device))
+    softvqvae.eval()
+    print("Loaded frozen SoftVQVAE model.")
+    
+    # 1. 创建连续隐空间数据集
+    continuous_latents = extract_continuous_latents_softvqvae(softvqvae, training_loader, device)
+    print(f"SoftVQVAE continuous latent dataset created. Shape: {continuous_latents.shape}")
+
+    # 2. 训练 Diffusion Model 先验模型
+    diffusion_save_path = os.path.join(save_dir, "diffusion_pipeline_on_softvqvae")
+    diffusion_pipeline = train_diffusion_model(continuous_latents, diffusion_save_path, args)
+    
+    # 3. 生成新图片
+    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae.decoder, args.num_samples_to_generate, device)
+    save_image(generated_images_softvqvae.data.cpu(), os.path.join(save_dir, 'generated_by_diffusion.png'), nrow=8, normalize=True)
+    print("Generated images from SoftVQVAE+Diffusion pipeline and saved.")
+    
+     # --- Pipeline 1: VQVAE + PixelCNN ---
     print("\n" + "="*50)
     print("=== Pipeline 1: VQVAE + GatedPixelCNN ===")
     print("="*50)
@@ -319,30 +344,6 @@ def main():
     save_image(generated_images_vqvae.data.cpu(), os.path.join(save_dir, 'generated_by_pixelcnn.png'), nrow=8, normalize=True)
     print("Generated images from VQVAE+PixelCNN pipeline and saved.")
 
-    # --- Pipeline 2: SoftVQVAE + Diffusion Model ---
-    print("\n" + "="*50)
-    print("=== Pipeline 2: SoftVQVAE + Diffusion Model ===")
-    print("="*50)
-
-    # 加载冻结的 SoftVQVAE 模型
-    softvqvae = SoftVQVAE(in_channels=3, h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25).to(device)
-    softvqvae.load_state_dict(torch.load(args.softvqvae_model_path, map_location=device))
-    softvqvae.eval()
-    print("Loaded frozen SoftVQVAE model.")
-    
-    # 1. 创建连续隐空间数据集
-    continuous_latents = extract_continuous_latents_softvqvae(softvqvae, training_loader, device)
-    print(f"SoftVQVAE continuous latent dataset created. Shape: {continuous_latents.shape}")
-
-    # 2. 训练 Diffusion Model 先验模型
-    diffusion_save_path = os.path.join(save_dir, "diffusion_pipeline_on_softvqvae")
-    diffusion_pipeline = train_diffusion_model(continuous_latents, diffusion_save_path, args)
-    
-    # 3. 生成新图片
-    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae.decoder, args.num_samples_to_generate, device)
-    save_image(generated_images_softvqvae.data.cpu(), os.path.join(save_dir, 'generated_by_diffusion.png'), nrow=8, normalize=True)
-    print("Generated images from SoftVQVAE+Diffusion pipeline and saved.")
-    
     print("\n" + "="*50)
     print(f"Ablation study complete! All results saved in: {save_dir}")
     print("="*50)
