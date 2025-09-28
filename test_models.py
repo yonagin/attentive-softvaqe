@@ -22,12 +22,11 @@ def test_models():
     # Create models
     vqvae = VQVAE(h_dim, res_h_dim, n_res_layers, n_embeddings, embedding_dim, beta).to(device)
     
-    # Create encoder and decoder for SoftVQVAE
-    encoder = Encoder(3, h_dim, n_res_layers, res_h_dim)
-    decoder = Decoder(embedding_dim, h_dim, n_res_layers, res_h_dim)
+    # Create SoftVQVAE with new constructor
     soft_vqvae = SoftVQVAE(
-        encoder=encoder,
-        decoder=decoder,
+        h_dim=h_dim,
+        res_h_dim=res_h_dim,
+        n_res_layers=n_res_layers,
         num_embeddings=n_embeddings,
         embedding_dim=embedding_dim,
         beta=beta,

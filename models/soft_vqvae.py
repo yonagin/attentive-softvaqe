@@ -12,15 +12,20 @@ class SoftVQVAE(nn.Module):
     Soft VQ-VAE model with soft quantization.
     """
     
-    def __init__(self, encoder, decoder, num_embeddings, embedding_dim, beta=0.25, temperature=1.0):
+    def __init__(self, h_dim, res_h_dim, n_res_layers, num_embeddings, embedding_dim, beta=0.25, temperature=1.0):
         super(SoftVQVAE, self).__init__()
-        self.encoder = encoder
+        # 创建编码器和解码器
+        self.encoder = Encoder(3, h_dim, n_res_layers, res_h_dim)
+        # 添加预量化卷积层，将编码器输出通道数从h_dim转换为embedding_dim
+        self.pre_quantization_conv = nn.Conv2d(
+            h_dim, embedding_dim, kernel_size=1, stride=1)
         self.quantizer = SoftVQ(num_embeddings, embedding_dim, temperature)
-        self.decoder = decoder
+        self.decoder = Decoder(embedding_dim, h_dim, n_res_layers, res_h_dim)
         self.beta = beta
 
     def loss(self, x):
         ze = self.encoder(x)
+        ze = self.pre_quantization_conv(ze)
         zq, _ = self.quantizer(ze)
         # 使用ze.detach()来阻止梯度流向量化编码器
         codebook_loss = F.mse_loss(ze.detach(), zq)
@@ -38,6 +43,7 @@ class SoftVQVAE(nn.Module):
         Forward pass
         """
         ze = self.encoder(x)
+        ze = self.pre_quantization_conv(ze)
         zq, _ = self.quantizer(ze)
         x_hat = self.decoder(zq)
         return x_hat
@@ -47,7 +53,11 @@ class SoftVQVAE(nn.Module):
         """
         Reconstruct input
         """
-        return self.forward(x)
+        ze = self.encoder(x)
+        ze = self.pre_quantization_conv(ze)
+        zq, _ = self.quantizer(ze)
+        x_hat = self.decoder(zq)
+        return x_hat
 
 
 if __name__ == "__main__":
