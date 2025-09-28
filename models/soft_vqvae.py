@@ -33,6 +33,7 @@ class SoftVQVAE(nn.Module):
         """
         ze = self.encoder(x)
         ze = self.pre_quantization_conv(ze)
+        ze = F.tanh(ze)
         zq, _ = self.quantizer(ze)
         x_hat = self.decoder(zq)
         

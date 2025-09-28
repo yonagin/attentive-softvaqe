@@ -146,6 +146,7 @@ def extract_continuous_latents_softvqvae(model, data_loader, device):
             x = x.to(device)
             z_e = model.encoder(x)
             z_e = model.pre_quantization_conv(z_e)
+            ze = F.tanh(ze)
             # 提取进入量化层的潜变量 z_e，而不是量化后的 z_q
             all_latents.append(z_e.cpu())
             
@@ -240,7 +241,7 @@ def train_diffusion_model(latent_dataset, save_path, args):
     return pipeline
 
 
-def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, device, norm_stats_path=None):
+def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, device):
     """
     使用扩散模型生成隐向量, 并用 SoftVQVAE 模型进行量化和解码.
     """
@@ -274,25 +275,11 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, de
         if generated_z_e.shape[-1] == 64:  # channels维度在最后
             generated_z_e = generated_z_e.permute(0, 3, 1, 2)
     
-    # 2. 反归一化：将扩散模型生成的归一化隐向量转换回原始范围
-    if norm_stats_path and os.path.exists(norm_stats_path):
-        with open(norm_stats_path, 'r') as f:
-            norm_stats = json.load(f)
-        
-        min_val = norm_stats["min"]
-        max_val = norm_stats["max"]
-        
-        # 首先将 [-1, 1] 转换回 [0, 1]
-        generated_z_e = (generated_z_e + 1.0) / 2.0
-        # 然后将 [0, 1] 转换回原始范围
-        generated_z_e = generated_z_e * (max_val - min_val) + min_val
-        print(f"Denormalized latent range: [{generated_z_e.min().item():.4f}, {generated_z_e.max().item():.4f}]")
-    
-    # 3. 将生成的 z_e 输入量化层得到 z_q
+    # 2. 将生成的 z_e 输入量化层得到 z_q
     with torch.no_grad():
         z_q, _ = softvqvae_model.quantizer(generated_z_e)
         
-    # 4. 将量化后的 z_q 输入解码器得到最终图像
+    # 3. 将量化后的 z_q 输入解码器得到最终图像
     with torch.no_grad():
         generated_images = softvqvae_model.decoder(z_q)
         
@@ -489,11 +476,10 @@ def main():
 
     # 2. 训练 Diffusion Model 先验模型
     diffusion_save_path = os.path.join(save_dir, "diffusion_pipeline_on_softvqvae")
-    diffusion_pipeline = train_diffusion_model(normalized_latents, diffusion_save_path, args)
+    diffusion_pipeline = train_diffusion_model(continuous_latents, diffusion_save_path, args)
     
     # 3. 生成新图片
-    norm_stats_path = os.path.join(save_dir, 'norm_stats.json')
-    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae, args.num_samples_to_generate, device, norm_stats_path)
+    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae, args.num_samples_to_generate, device)
     save_image(generated_images_softvqvae.data.cpu(), os.path.join(save_dir, 'generated_by_diffusion.png'), nrow=8, normalize=True)
     print("Generated images from SoftVQVAE+Diffusion pipeline and saved.")
 
