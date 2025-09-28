@@ -196,8 +196,8 @@ def train_diffusion_model(latent_dataset, save_path, args):
             # 根据 t 向干净的隐向量中添加噪声
             noisy_latents = noise_scheduler.add_noise(clean_latents, noise, timesteps)
             
-            # 预测噪声
-            noise_pred = model(noisy_latents, timesteps, return_dict=False)[0]
+            # 预测噪声 (使用正确的forward方法调用)
+            noise_pred = model(noisy_latents, timesteps).sample
             
             # 计算损失 (预测的噪声 vs 真实的噪声)
             loss = F.mse_loss(noise_pred, noise)
@@ -230,13 +230,16 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_decoder, num_samples, 
     softvqvae_decoder.eval()
     
     # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成隐向量 z_0
-    # The pipeline output is on CPU, we need to move it to the correct device.
-    generated_latents = diffusion_pipeline(
-        batch_size=num_samples,
-        generator=torch.manual_seed(0), # for reproducibility
-    ).images
+    # 使用正确的pipeline调用方式
+    with torch.no_grad():
+        generated_latents = diffusion_pipeline(
+            batch_size=num_samples,
+            generator=torch.manual_seed(0), # for reproducibility
+            output_type="tensor"
+        ).images
     
-    generated_latents = torch.from_numpy(generated_latents).to(device)
+    # 确保张量在正确的设备上
+    generated_latents = generated_latents.to(device)
     
     # 2. 将生成的隐向量喂给冻结的解码器
     with torch.no_grad():
