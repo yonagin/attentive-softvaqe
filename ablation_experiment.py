@@ -118,14 +118,23 @@ def calculate_ssim(img1, img2, window_size=11, size_average=True):
         return ssim_map.mean(1).mean(1).mean(1)
 
 
+# Global cache for LPIPS model to avoid repeated initialization
+_lpips_model_cache = None
+
 def calculate_lpips(model, img1, img2):
     """
     Calculate LPIPS (Learned Perceptual Image Patch Similarity)
     """
+    global _lpips_model_cache
+    
     # Use LPIPS library if available, otherwise use VGG-based similarity
     try:
-        loss_fn = lpips.LPIPS(net='vgg')
-        return loss_fn(img1, img2).mean().item()
+        if _lpips_model_cache is None:
+            _lpips_model_cache = lpips.LPIPS(net='vgg')
+        
+        # Move model to the same device as input images
+        _lpips_model_cache = _lpips_model_cache.to(img1.device)
+        return _lpips_model_cache(img1, img2).mean().item()
     except:
         # Fallback: VGG feature similarity
         vgg = vgg16(pretrained=True).features[:16].eval().to(img1.device)
