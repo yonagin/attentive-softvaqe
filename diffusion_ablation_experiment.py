@@ -436,7 +436,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--dataset", type=str, default='CIFAR10')
     parser.add_argument("--vqvae_model_path", type=str, required=True, help="Path to pre-trained VQVAE model.")
-    parser.add_argument("--softvqvae_model_path", type=str, required=True, help="Path to pre-trained SoftVQVAE model.")
+    parser.add_argument("--softvqvae_model_path", type=str, default=None, help="Path to pre-trained SoftVQVAE model.")
     parser.add_argument("--ortho_vae_model_path", type=str, default=None, help="Path to pre-trained OrthoVAE model.")
     parser.add_argument("--latent_source", type=str, default='softvqvae', choices=['softvqvae', 'ortho_vae'], 
                         help="Source of latent vectors for diffusion training: 'softvqvae' or 'ortho_vae'.")
@@ -457,7 +457,9 @@ def main():
     args = parser.parse_args()
     
     # 验证参数
-    if args.latent_source == 'ortho_vae' and args.ortho_vae_model_path is None:
+    if args.latent_source == 'softvqvae' and args.softvqvae_model_path is None:
+        raise ValueError("When using softvqvae as latent source, --softvqvae_model_path must be provided.")
+    elif args.latent_source == 'ortho_vae' and args.ortho_vae_model_path is None:
         raise ValueError("When using ortho_vae as latent source, --ortho_vae_model_path must be provided.")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
