@@ -183,7 +183,7 @@ def train_diffusion_model(latent_dataset, save_path, args):
         # 最多下采样一次
         down_blocks = ("DownBlock2D",)
         up_blocks = ("UpBlock2D",)
-        block_channels = (128, 256) # 减少层数，但可以增加宽度
+        block_channels = (128,) # 减少层数，但可以增加宽度
     else:
         # 默认配置
         down_blocks = ("DownBlock2D", "DownBlock2D")
