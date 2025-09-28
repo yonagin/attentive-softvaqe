@@ -232,11 +232,21 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_decoder, num_samples, 
     # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成隐向量 z_0
     # 使用正确的pipeline调用方式
     with torch.no_grad():
-        generated_latents = diffusion_pipeline(
+        output = diffusion_pipeline(
             batch_size=num_samples,
             generator=torch.manual_seed(0), # for reproducibility
             output_type="tensor"
-        ).images
+        )
+        
+        # 确保返回的是PyTorch张量
+        if hasattr(output, 'images'):
+            generated_latents = output.images
+        else:
+            generated_latents = output
+        
+        # 如果返回的是numpy数组，转换为PyTorch张量
+        if isinstance(generated_latents, np.ndarray):
+            generated_latents = torch.from_numpy(generated_latents)
     
     # 确保张量在正确的设备上
     generated_latents = generated_latents.to(device)
