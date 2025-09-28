@@ -40,18 +40,13 @@ def extract_latent_codes(model, data_loader, device):
                 
             else:
                 # For SoftVQVAE
-                # 1. 正常获取高质量软向量 z_q
-                z_q, attn_weights = model.quantizer(z) 
+                # 1. 正常获取你的注意力权重
+                z_q, attn_weights = model.quantizer(z) # attn_weights shape: [B*H*W, num_embeddings]
 
-                # 2. 现在，对 z_q 进行离散化，而不是对 z
-                z_q_flat = z_q.permute(0, 2, 3, 1).contiguous()
-                z_q_flat = z_q_flat.view(-1, model.quantizer.embedding_dim)
-
-                # 3. 计算 z_q 和码本之间的距离
-                distances = (z_q_flat.unsqueeze(1) - model.quantizer.codebook.weight.unsqueeze(0)).pow(2).sum(2)
-
-                # 4. 找到最近的索引
-                indices = torch.argmin(distances, dim=1)
+                # 2. 直接从这个分布中采样一个索引
+                # torch.multinomial 要求输入是 2D 的
+                indices_flat = torch.multinomial(attn_weights, num_samples=1) # 输出 shape: [B*H*W, 1]
+                indices = indices_flat.squeeze(1) # 移除多余的维度
 
             
             # Reshape indices to match latent spatial dimensions
