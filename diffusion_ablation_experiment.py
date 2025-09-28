@@ -251,6 +251,12 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_decoder, num_samples, 
     # 确保张量在正确的设备上
     generated_latents = generated_latents.to(device)
     
+    # 检查并调整维度顺序
+    if len(generated_latents.shape) == 4:
+        # 如果维度是 [batch_size, height, width, channels]，需要转换为 [batch_size, channels, height, width]
+        if generated_latents.shape[-1] == 64:  # channels维度在最后
+            generated_latents = generated_latents.permute(0, 3, 1, 2)
+    
     # 2. 将生成的隐向量喂给冻结的解码器
     with torch.no_grad():
         generated_images = softvqvae_decoder(generated_latents)
