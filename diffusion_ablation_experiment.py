@@ -64,8 +64,12 @@ def train_pixelcnn(model, model_name, training_loader, validation_loader, args, 
         for codes in progress_bar:
             codes = codes[0].to(device) # Dataloader returns a list
             
+            # 创建假的标签张量（假设使用CIFAR-10数据集，标签范围0-9）
+            batch_size = codes.shape[0]
+            dummy_labels = torch.randint(0, 10, (batch_size,), device=device)
+            
             optimizer.zero_grad()
-            logits = model(codes, labels=None) # Unconditional for simplicity
+            logits = model(codes, dummy_labels) # 传递标签参数
             logits = logits.permute(0, 2, 3, 1).contiguous()
             loss = criterion(logits.view(-1, args.n_embeddings), codes.view(-1))
             loss.backward()
@@ -306,6 +310,38 @@ def main():
     training_data, _, training_loader, _, _ = utils.load_data_and_data_loaders(
         args.dataset, args.batch_size)
 
+    
+     # --- Pipeline 1: VQVAE + PixelCNN ---
+    print("\n" + "="*50)
+    print("=== Pipeline 1: VQVAE + GatedPixelCNN ===")
+    print("="*50)
+
+    # 加载冻结的 VQVAE 模型
+    vqvae = VQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25).to(device)
+    vqvae.load_state_dict(torch.load(args.vqvae_model_path, map_location=device))
+    vqvae.eval()
+    print("Loaded frozen VQVAE model.")
+
+    # 1. 创建离散隐空间数据集
+    discrete_latents = extract_discrete_latents_vqvae(vqvae, training_loader, device)
+    latent_shape_vqvae = discrete_latents.shape[1:] # e.g. (8, 8) or (32, 32)
+    print(f"VQVAE discrete latent dataset created. Shape: {discrete_latents.shape}")
+
+    # 2. 训练 PixelCNN 先验模型
+    pixelcnn = GatedPixelCNN(input_dim=args.n_embeddings, dim=args.img_dim, n_layers=args.n_layers, n_classes=10).to(device)
+    latent_dataset_vqvae = TensorDataset(discrete_latents)
+    latent_loader_vqvae = DataLoader(latent_dataset_vqvae, batch_size=args.batch_size, shuffle=True)
+    pixelcnn = train_pixelcnn(pixelcnn, "VQVAE", latent_loader_vqvae, None, args, device)
+    
+    # 保存 PixelCNN 模型
+    pixelcnn_save_path = os.path.join(save_dir, "pixelcnn_on_vqvae.pth")
+    torch.save(pixelcnn.state_dict(), pixelcnn_save_path)
+    print(f"PixelCNN model saved to {pixelcnn_save_path}")
+
+    # 3. 生成新图片
+    generated_images_vqvae = generate_with_pixelcnn(pixelcnn, vqvae, args.num_samples_to_generate, latent_shape_vqvae, device)
+    save_image(generated_images_vqvae.data.cpu(), os.path.join(save_dir, 'generated_by_pixelcnn.png'), nrow=8, normalize=True)
+    print("Generated images from VQVAE+PixelCNN pipeline and saved.")
 
     # --- Pipeline 2: SoftVQVAE + Diffusion Model ---
     print("\n" + "="*50)
@@ -330,38 +366,6 @@ def main():
     generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae.decoder, args.num_samples_to_generate, device)
     save_image(generated_images_softvqvae.data.cpu(), os.path.join(save_dir, 'generated_by_diffusion.png'), nrow=8, normalize=True)
     print("Generated images from SoftVQVAE+Diffusion pipeline and saved.")
-    
-     # --- Pipeline 1: VQVAE + PixelCNN ---
-    print("\n" + "="*50)
-    print("=== Pipeline 1: VQVAE + GatedPixelCNN ===")
-    print("="*50)
-
-    # 加载冻结的 VQVAE 模型
-    vqvae = VQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25).to(device)
-    vqvae.load_state_dict(torch.load(args.vqvae_model_path, map_location=device))
-    vqvae.eval()
-    print("Loaded frozen VQVAE model.")
-
-    # 1. 创建离散隐空间数据集
-    discrete_latents = extract_discrete_latents_vqvae(vqvae, training_loader, device)
-    latent_shape_vqvae = discrete_latents.shape[1:] # e.g. (8, 8) or (32, 32)
-    print(f"VQVAE discrete latent dataset created. Shape: {discrete_latents.shape}")
-
-    # 2. 训练 PixelCNN 先验模型
-    pixelcnn = GatedPixelCNN(input_dim=args.n_embeddings, dim=args.img_dim, n_layers=args.n_layers, n_classes=None).to(device)
-    latent_dataset_vqvae = TensorDataset(discrete_latents)
-    latent_loader_vqvae = DataLoader(latent_dataset_vqvae, batch_size=args.batch_size, shuffle=True)
-    pixelcnn = train_pixelcnn(pixelcnn, "VQVAE", latent_loader_vqvae, None, args, device)
-    
-    # 保存 PixelCNN 模型
-    pixelcnn_save_path = os.path.join(save_dir, "pixelcnn_on_vqvae.pth")
-    torch.save(pixelcnn.state_dict(), pixelcnn_save_path)
-    print(f"PixelCNN model saved to {pixelcnn_save_path}")
-
-    # 3. 生成新图片
-    generated_images_vqvae = generate_with_pixelcnn(pixelcnn, vqvae, args.num_samples_to_generate, latent_shape_vqvae, device)
-    save_image(generated_images_vqvae.data.cpu(), os.path.join(save_dir, 'generated_by_pixelcnn.png'), nrow=8, normalize=True)
-    print("Generated images from VQVAE+PixelCNN pipeline and saved.")
 
     print("\n" + "="*50)
     print(f"Ablation study complete! All results saved in: {save_dir}")
