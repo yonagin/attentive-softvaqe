@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from models.vqvae import VQVAE
 from models.soft_vqvae import SoftVQVAE
+from models.encoder import Encoder
+from models.decoder import Decoder
 
 def test_models():
     """Test both VQVAE and SoftVQVAE models"""
@@ -19,7 +21,18 @@ def test_models():
     
     # Create models
     vqvae = VQVAE(h_dim, res_h_dim, n_res_layers, n_embeddings, embedding_dim, beta).to(device)
-    soft_vqvae = SoftVQVAE(h_dim, res_h_dim, n_res_layers, n_embeddings, embedding_dim, beta, temperature).to(device)
+    
+    # Create encoder and decoder for SoftVQVAE
+    encoder = Encoder(3, h_dim, n_res_layers, res_h_dim)
+    decoder = Decoder(embedding_dim, h_dim, n_res_layers, res_h_dim)
+    soft_vqvae = SoftVQVAE(
+        encoder=encoder,
+        decoder=decoder,
+        num_embeddings=n_embeddings,
+        embedding_dim=embedding_dim,
+        beta=beta,
+        temperature=temperature
+    ).to(device)
     
     # Test input
     batch_size = 4
@@ -41,19 +54,16 @@ def test_models():
     print(f"VQVAE - Output shapes match: {x_hat.shape == x_hat_loss.shape}")
     
     print("\nTesting SoftVQVAE...")
-    # Test forward pass without loss
-    embedding_loss, x_hat, perplexity = soft_vqvae(x)
+    # Test forward pass
+    x_hat = soft_vqvae(x)
     print(f"SoftVQVAE - Input shape: {x.shape}")
     print(f"SoftVQVAE - Output shape: {x_hat.shape}")
-    print(f"SoftVQVAE - Embedding loss: {embedding_loss.item():.4f}")
-    print(f"SoftVQVAE - Perplexity: {perplexity.item():.4f}")
     
-    # Test forward pass with loss
-    total_loss, recon_loss, embedding_loss, perplexity, x_hat_loss = soft_vqvae(x, return_loss=True)
+    # Test loss computation
+    total_loss, recon_loss, codebook_loss = soft_vqvae.loss(x)
     print(f"SoftVQVAE - Total loss: {total_loss.item():.4f}")
     print(f"SoftVQVAE - Recon loss: {recon_loss.item():.4f}")
-    print(f"SoftVQVAE - Embedding loss: {embedding_loss.item():.4f}")
-    print(f"SoftVQVAE - Output shapes match: {x_hat.shape == x_hat_loss.shape}")
+    print(f"SoftVQVAE - Codebook loss: {codebook_loss.item():.4f}")
     
     # Test reconstruction
     x_recon_vqvae = vqvae.reconstruct(x)

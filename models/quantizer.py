@@ -7,70 +7,39 @@ import numpy as np
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class SoftVectorQuantizer(nn.Module):
+class SoftVQ(nn.Module):
     """
     Soft discretization bottleneck for Soft-VQVAE.
     
     Inputs:
-    - n_e : number of embeddings
-    - e_dim : dimension of embedding
-    - beta : commitment cost
+    - num_embeddings : number of embeddings
+    - embedding_dim : dimension of embedding
     - temperature : softmax temperature for soft quantization
     """
 
-    def __init__(self, n_e, e_dim, beta, temperature=1.0):
-        super(SoftVectorQuantizer, self).__init__()
-        self.n_e = n_e
-        self.e_dim = e_dim
-        self.beta = beta
+    def __init__(self, num_embeddings, embedding_dim, temperature=1.0):
+        super(SoftVQ, self).__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
         self.temperature = temperature
-
-        self.embedding = nn.Embedding(self.n_e, self.e_dim)
-        self.embedding.weight.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
-
-    def forward(self, z):
-        # reshape z -> (batch, height, width, channel) and flatten
-        z = z.permute(0, 2, 3, 1).contiguous()
-        z_flattened = z.view(-1, self.e_dim)
+        self.codebook = nn.Embedding(num_embeddings, embedding_dim)
+     
+    def forward(self, ze):
+        # ze 的 shape: [B, C, H, W] -> [B, H, W, C]
+        ze = ze.permute(0, 2, 3, 1).contiguous()
+        b, h, w, d = ze.shape
+        ze_flat = ze.view(-1, self.embedding_dim)
         
-        # distances from z to embeddings e_j
-        d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-            torch.sum(self.embedding.weight**2, dim=1) - 2 * \
-            torch.matmul(z_flattened, self.embedding.weight.t())
-
-        # soft quantization using softmax
-        soft_assignments = F.softmax(-d / self.temperature, dim=1)
+        scores = torch.matmul(ze_flat, self.codebook.weight.t())
+        attn_weights = F.softmax(scores / self.temperature, dim=1)
         
-        # get soft quantized latent vectors
-        z_q = torch.matmul(soft_assignments, self.embedding.weight).view(z.shape)
-
-        # compute loss for embedding
-        loss = torch.mean((z_q.detach()-z)**2) + self.beta * \
-            torch.mean((z_q - z.detach()) ** 2)
-
-        # preserve gradients
-        z_q = z + (z_q - z).detach()
-
-        # perplexity for soft assignments
-        # For soft assignments, we need a different perplexity calculation
-        # that measures the effective number of codes being used
+        zq_flat = torch.matmul(attn_weights, self.codebook.weight)
+        zq = zq_flat.view(b, h, w, d)
         
-        # Method 1: Entropy-based perplexity (more appropriate for soft assignments)
-        # This measures the exponential of the entropy of the average distribution
-        avg_probs = torch.mean(soft_assignments, dim=0)
-        entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-10))
-        perplexity = torch.exp(entropy)
+        # 将 shape 转换回 [B, C, H, W] 以便解码器处理
+        zq = zq.permute(0, 3, 1, 2).contiguous()
         
-        # Method 2: Alternative - measure how "peaked" the distributions are
-        # This gives a measure of how concentrated the assignments are
-        # max_probs = torch.max(soft_assignments, dim=1)[0]
-        # avg_max_prob = torch.mean(max_probs)
-        # perplexity = 1.0 / avg_max_prob  # Inverse of average maximum probability
-
-        # reshape back to match original input shape
-        z_q = z_q.permute(0, 3, 1, 2).contiguous()
-
-        return loss, z_q, perplexity, soft_assignments, torch.argmax(soft_assignments, dim=1)
+        return zq, attn_weights
 
 
 class VectorQuantizer(nn.Module):

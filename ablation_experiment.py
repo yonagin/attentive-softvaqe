@@ -6,6 +6,8 @@ import argparse
 import utils
 from models.vqvae import VQVAE
 from models.soft_vqvae import SoftVQVAE
+from models.encoder import Encoder
+from models.decoder import Decoder
 import os
 import json
 from datetime import datetime
@@ -40,14 +42,26 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
         x = x.to(device)
         optimizer.zero_grad()
         
-        # Use the unified forward interface with loss computation
-        total_loss, recon_loss, embedding_loss, perplexity, _ = model(x, return_loss=True)
+        # Use the appropriate loss computation method based on model type
+        if hasattr(model, 'loss'):
+            # For SoftVQVAE with new interface
+            total_loss, recon_loss, codebook_loss = model.loss(x)
+            # For compatibility with existing code, set embedding_loss to codebook_loss
+            embedding_loss = codebook_loss
+            # SoftVQVAE doesn't compute perplexity, so we don't track it
+            perplexity = None
+        else:
+            # For VQVAE with original interface
+            total_loss, recon_loss, embedding_loss, perplexity, _ = model(x, return_loss=True)
         
         total_loss.backward()
         optimizer.step()
         
         results["recon_errors"].append(recon_loss.cpu().detach().numpy())
-        results["perplexities"].append(perplexity.cpu().detach().numpy())
+        if perplexity is not None:
+            results["perplexities"].append(perplexity.cpu().detach().numpy())
+        else:
+            results["perplexities"].append(0.0)  # Placeholder for SoftVQVAE
         results["loss_vals"].append(total_loss.cpu().detach().numpy())
         results["embedding_losses"].append(embedding_loss.cpu().detach().numpy())
         results["n_updates"] = i
@@ -353,9 +367,12 @@ def main():
             args.n_residual_layers, args.n_embeddings, args.embedding_dim, args.beta
         ).to(device),
         'SoftVQVAE': SoftVQVAE(
-            args.n_hiddens, args.n_residual_hiddens,
-            args.n_residual_layers, args.n_embeddings, args.embedding_dim, 
-            args.beta, args.soft_temperature
+            encoder=Encoder(3, args.n_hiddens, args.n_residual_layers, args.n_residual_hiddens),
+            decoder=Decoder(args.embedding_dim, args.n_hiddens, args.n_residual_layers, args.n_residual_hiddens),
+            num_embeddings=args.n_embeddings,
+            embedding_dim=args.embedding_dim,
+            beta=args.beta,
+            temperature=args.soft_temperature
         ).to(device)
     }
     
