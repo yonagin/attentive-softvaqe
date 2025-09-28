@@ -367,8 +367,9 @@ def main():
             args.n_residual_layers, args.n_embeddings, args.embedding_dim, args.beta
         ).to(device),
         'SoftVQVAE': SoftVQVAE(
-            encoder=Encoder(3, args.n_hiddens, args.n_residual_layers, args.n_residual_hiddens),
-            decoder=Decoder(args.embedding_dim, args.n_hiddens, args.n_residual_layers, args.n_residual_hiddens),
+            h_dim=args.n_hiddens,
+            res_h_dim=args.n_residual_hiddens,
+            n_res_layers=args.n_residual_layers,
             num_embeddings=args.n_embeddings,
             embedding_dim=args.embedding_dim,
             beta=args.beta,
