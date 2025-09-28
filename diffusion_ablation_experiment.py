@@ -455,6 +455,8 @@ def main():
     
     # 1. 创建连续隐空间数据集
     continuous_latents = extract_continuous_latents_softvqvae(softvqvae, training_loader, device)
+    print(f"Latent value range: MIN={continuous_latents.min().item()}, MAX={continuous_latents.max().item()}")
+    print(f"Latent value mean: {continuous_latents.mean().item()}, std: {continuous_latents.std().item()}")
     print(f"SoftVQVAE continuous latent dataset created. Shape: {continuous_latents.shape}")
 
     # 2. 训练 Diffusion Model 先验模型
