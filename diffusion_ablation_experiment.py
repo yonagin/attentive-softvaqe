@@ -27,27 +27,37 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 # ==============================================================================
 
 def extract_discrete_latents_vqvae(model, data_loader, device):
-    """
-    专门为 VQVAE 提取离散的隐空间索引 (latent indices).
+   """
+    Extract latent codes from VQVAE model
     """
     model.eval()
     all_codes = []
     all_labels = []
     
     with torch.no_grad():
-        for x, labels in tqdm(data_loader, desc="Extracting VQVAE Latents"):
+        for batch_idx, (x, labels) in enumerate(data_loader):
             x = x.to(device)
+            
+            # Get latent codes from VQVAE - both models use encoder attribute
             z = model.encoder(x)
             z = model.pre_quantization_conv(z)
-            _, _, _, _, min_encoding_indices = model.vector_quantization(z)
             
-            indices = min_encoding_indices.squeeze(1) # [B, 1, H, W] -> [B, H, W]
+            # For VQVAE
+            embedding_loss, z_q, perplexity, min_encodings, min_encoding_indices = model.vector_quantization(z)
+            
+            # Use the indices directly from the vector quantizer
+            indices = min_encoding_indices.squeeze(1)
+
+            
+            # Reshape indices to match latent spatial dimensions
+            latent_shape = z.shape[2:]
+            indices = indices.view(x.shape[0], *latent_shape)
+            
             all_codes.append(indices.cpu())
             all_labels.append(labels)
     
     all_codes = torch.cat(all_codes, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
-    
     return all_codes, all_labels
 
 
