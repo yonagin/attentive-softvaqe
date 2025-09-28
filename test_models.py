@@ -2,11 +2,12 @@ import torch
 import torch.nn as nn
 from models.vqvae import VQVAE
 from models.soft_vqvae import SoftVQVAE
+from models.ortho_vae import OrthoVAE
 from models.encoder import Encoder
 from models.decoder import Decoder
 
 def test_models():
-    """Test both VQVAE and SoftVQVAE models"""
+    """Test VQVAE, SoftVQVAE, and OrthoVAE models"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
@@ -18,6 +19,8 @@ def test_models():
     embedding_dim = 64
     beta = 0.25
     temperature = 1.0
+    ortho_weight = 0.1
+    entropy_weight = 0.1
     
     # Create models
     vqvae = VQVAE(h_dim, res_h_dim, n_res_layers, n_embeddings, embedding_dim, beta).to(device)
@@ -31,6 +34,17 @@ def test_models():
         embedding_dim=embedding_dim,
         beta=beta,
         temperature=temperature
+    ).to(device)
+    
+    # Create OrthoVAE
+    ortho_vae = OrthoVAE(
+        h_dim=h_dim,
+        res_h_dim=res_h_dim,
+        n_res_layers=n_res_layers,
+        num_embeddings=n_embeddings,
+        embedding_dim=embedding_dim,
+        ortho_weight=ortho_weight,
+        entropy_weight=entropy_weight
     ).to(device)
     
     # Test input
@@ -69,6 +83,30 @@ def test_models():
     x_recon_vqvae = vqvae.reconstruct(x)
     x_recon_soft = soft_vqvae.reconstruct(x)
     print(f"\nReconstruction shapes match: {x_recon_vqvae.shape == x_recon_soft.shape}")
+    
+    print("\nTesting OrthoVAE...")
+    # Test forward pass without loss
+    x_hat = ortho_vae(x)
+    print(f"OrthoVAE - Input shape: {x.shape}")
+    print(f"OrthoVAE - Output shape: {x_hat.shape}")
+    
+    # Test forward pass with loss
+    total_loss, recon_loss, ortho_loss, entropy_loss, x_hat_loss = ortho_vae(x, return_loss=True)
+    print(f"OrthoVAE - Total loss: {total_loss.item():.4f}")
+    print(f"OrthoVAE - Recon loss: {recon_loss.item():.4f}")
+    print(f"OrthoVAE - Orthogonal loss: {ortho_loss.item():.4f}")
+    print(f"OrthoVAE - Entropy loss: {entropy_loss.item():.4f}")
+    print(f"OrthoVAE - Output shapes match: {x_hat.shape == x_hat_loss.shape}")
+    
+    # Test reconstruction
+    x_recon_ortho = ortho_vae.reconstruct(x)
+    print(f"OrthoVAE - Reconstruction shape: {x_recon_ortho.shape}")
+    
+    # Test encode/decode
+    coordinates = ortho_vae.encode(x)
+    x_recon_decode = ortho_vae.decode(coordinates)
+    print(f"OrthoVAE - Encode/decode shape: {x_recon_decode.shape}")
+    print(f"OrthoVAE - Encode/decode matches: {torch.allclose(x_recon_ortho, x_recon_decode)}")
     
     print("\nAll tests passed! Models are correctly implemented.")
 

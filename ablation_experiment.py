@@ -6,6 +6,7 @@ import argparse
 import utils
 from models.vqvae import VQVAE
 from models.soft_vqvae import SoftVQVAE
+from models.ortho_vae import OrthoVAE
 from models.encoder import Encoder
 from models.decoder import Decoder
 import os
@@ -32,7 +33,6 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
         'n_updates': 0,
         'recon_errors': [],
         'loss_vals': [],
-        'perplexities': [],
         'embedding_losses': [],
         'validation_recon_errors': []
     }
@@ -50,21 +50,19 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
             total_loss, recon_loss, codebook_loss, _ = model(x, return_loss=True, noise_std=noise_std)
             # For compatibility with existing code, set embedding_loss to codebook_loss
             embedding_loss = codebook_loss
-            # SoftVQVAE doesn't compute perplexity, so we don't track it
-            perplexity = None
+        elif isinstance(model, OrthoVAE):
+            # For OrthoVAE with new interface
+            total_loss, recon_loss, ortho_loss, entropy_loss, _ = model(x, return_loss=True)
+            # For compatibility with existing code, set embedding_loss to ortho_loss
+            embedding_loss = ortho_loss + entropy_loss
         else:
             # For VQVAE with original interface
-            total_loss, recon_loss, embedding_loss, perplexity, _ = model(x, return_loss=True)
+            total_loss, recon_loss, embedding_loss, _, _ = model(x, return_loss=True)
         
         total_loss.backward()
         optimizer.step()
         
         results["recon_errors"].append(recon_loss.cpu().detach().numpy())
-        if perplexity is not None:
-            results["perplexities"].append(perplexity.cpu().detach().numpy())
-        else:
-            # SoftVQVAE doesn't compute perplexity, so we don't track it
-            results["perplexities"].append(None)
         results["loss_vals"].append(total_loss.cpu().detach().numpy())
         results["embedding_losses"].append(embedding_loss.cpu().detach().numpy())
         results["n_updates"] = i
@@ -86,17 +84,9 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
             model.train()
         
         if i % args.log_interval == 0:
-            # Filter out None values for perplexity (SoftVQVAE case)
-            recent_perplexities = [p for p in results["perplexities"][-args.log_interval:] if p is not None]
-            if recent_perplexities:
-                perplexity_str = f'Perplexity: {np.mean(recent_perplexities):.4f}'
-            else:
-                perplexity_str = ''
-            
             print(f'{model_name} - Update #{i}, '
                   f'Recon Error: {np.mean(results["recon_errors"][-args.log_interval:]):.4f}, '
-                  f'Loss: {np.mean(results["loss_vals"][-args.log_interval:]):.4f}'
-                  + (f', {perplexity_str}' if perplexity_str else ''))
+                  f'Loss: {np.mean(results["loss_vals"][-args.log_interval:]):.4f}')
     
     return results
 
@@ -285,50 +275,87 @@ def plot_comparison(results_dict, save_dir):
     """
     os.makedirs(save_dir, exist_ok=True)
     
-    # Plot training reconstruction error
-    plt.figure(figsize=(12, 8))
+    num_models = len(results_dict)
     
-    plt.subplot(2, 2, 1)
-    for model_name, results in results_dict.items():
-        plt.plot(results['recon_errors'], label=model_name)
-    plt.xlabel('Training Steps')
-    plt.ylabel('Reconstruction Error')
-    plt.title('Training Reconstruction Error')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 2, 2)
-    for model_name, results in results_dict.items():
-        plt.plot(results['perplexities'], label=model_name)
-    plt.xlabel('Training Steps')
-    plt.ylabel('Perplexity')
-    plt.title('Codebook Perplexity')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 2, 3)
-    for model_name, results in results_dict.items():
-        plt.plot(results['loss_vals'], label=model_name)
-    plt.xlabel('Training Steps')
-    plt.ylabel('Total Loss')
-    plt.title('Training Loss')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 2, 4)
-    for model_name, results in results_dict.items():
+    if num_models == 1:
+        # Single model: create individual plots
+        model_name = list(results_dict.keys())[0]
+        results = results_dict[model_name]
+        
+        plt.figure(figsize=(15, 5))
+        
+        plt.subplot(1, 3, 1)
+        plt.plot(results['recon_errors'])
+        plt.xlabel('Training Steps')
+        plt.ylabel('Reconstruction Error')
+        plt.title(f'{model_name} - Training Reconstruction Error')
+        plt.grid(True)
+        
+        plt.subplot(1, 3, 2)
+        plt.plot(results['loss_vals'])
+        plt.xlabel('Training Steps')
+        plt.ylabel('Total Loss')
+        plt.title(f'{model_name} - Training Loss')
+        plt.grid(True)
+        
+        plt.subplot(1, 3, 3)
         if len(results['validation_recon_errors']) > 0:
             val_steps = np.arange(0, len(results['validation_recon_errors'])) * 100
-            plt.plot(val_steps, results['validation_recon_errors'], label=model_name)
-    plt.xlabel('Training Steps')
-    plt.ylabel('Validation Reconstruction Error')
-    plt.title('Validation Reconstruction Error')
-    plt.legend()
-    plt.grid(True)
+            plt.plot(val_steps, results['validation_recon_errors'])
+            plt.xlabel('Training Steps')
+            plt.ylabel('Validation Reconstruction Error')
+            plt.title(f'{model_name} - Validation Reconstruction Error')
+            plt.grid(True)
+        else:
+            plt.axis('off')
+            plt.text(0.5, 0.5, 'No validation data', 
+                    horizontalalignment='center', verticalalignment='center', 
+                    transform=plt.gca().transAxes)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, f'{model_name}_training.png'), dpi=300, bbox_inches='tight')
+        plt.close()
     
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'training_comparison.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+    else:
+        # Multiple models: create comparison plots
+        plt.figure(figsize=(12, 8))
+        
+        plt.subplot(2, 2, 1)
+        for model_name, results in results_dict.items():
+            plt.plot(results['recon_errors'], label=model_name)
+        plt.xlabel('Training Steps')
+        plt.ylabel('Reconstruction Error')
+        plt.title('Training Reconstruction Error')
+        plt.legend()
+        plt.grid(True)
+        
+        plt.subplot(2, 2, 2)
+        for model_name, results in results_dict.items():
+            plt.plot(results['loss_vals'], label=model_name)
+        plt.xlabel('Training Steps')
+        plt.ylabel('Total Loss')
+        plt.title('Training Loss')
+        plt.legend()
+        plt.grid(True)
+        
+        plt.subplot(2, 2, 3)
+        for model_name, results in results_dict.items():
+            if len(results['validation_recon_errors']) > 0:
+                val_steps = np.arange(0, len(results['validation_recon_errors'])) * 100
+                plt.plot(val_steps, results['validation_recon_errors'], label=model_name)
+        plt.xlabel('Training Steps')
+        plt.ylabel('Validation Reconstruction Error')
+        plt.title('Validation Reconstruction Error')
+        plt.legend()
+        plt.grid(True)
+        
+        # Add an empty subplot to maintain the 2x2 grid layout
+        plt.subplot(2, 2, 4)
+        plt.axis('off')  # Hide the empty subplot
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, 'training_comparison.png'), dpi=300, bbox_inches='tight')
+        plt.close()
 
 
 def main():
@@ -348,6 +375,11 @@ def main():
     parser.add_argument("--dataset", type=str, default='CIFAR10')
     parser.add_argument("--soft_temperature", type=float, default=1.0)
     parser.add_argument("--noise_std", type=float, default=0.0, help="Standard deviation of Gaussian noise to add to quantized latent vectors for SoftVQVAE")
+    
+    # Model selection parameters
+    parser.add_argument("--train_vqvae", action="store_true", default=False, help="Train VQVAE model")
+    parser.add_argument("--train_softvqvae", action="store_true", default=False, help="Train SoftVQVAE model")
+    parser.add_argument("--train_orthovae", action="store_true", default=False, help="Train OrthoVAE model")
     
     # Experiment settings
     parser.add_argument("--save_dir", type=str, default='ablation_results')
@@ -370,13 +402,17 @@ def main():
     training_data, validation_data, training_loader, validation_loader, x_train_var = utils.load_data_and_data_loaders(
         args.dataset, args.batch_size)
     
-    # Create models
-    models = {
-        'VQVAE': VQVAE(
+    # Create models based on selection parameters
+    models = {}
+    
+    if args.train_vqvae:
+        models['VQVAE'] = VQVAE(
             args.n_hiddens, args.n_residual_hiddens,
             args.n_residual_layers, args.n_embeddings, args.embedding_dim, args.beta
-        ).to(device),
-        'SoftVQVAE': SoftVQVAE(
+        ).to(device)
+    
+    if args.train_softvqvae:
+        models['SoftVQVAE'] = SoftVQVAE(
             h_dim=args.n_hiddens,
             res_h_dim=args.n_residual_hiddens,
             n_res_layers=args.n_residual_layers,
@@ -385,10 +421,26 @@ def main():
             beta=args.beta,
             temperature=args.soft_temperature
         ).to(device)
-    }
+    
+    if args.train_orthovae:
+        models['OrthoVAE'] = OrthoVAE(
+            h_dim=args.n_hiddens,
+            res_h_dim=args.n_residual_hiddens,
+            n_res_layers=args.n_residual_layers,
+            num_embeddings=args.n_embeddings,
+            embedding_dim=args.embedding_dim,
+            ortho_weight=0.1,
+            entropy_weight=0.1
+        ).to(device)
+    
+    # Check if at least one model is selected
+    if not models:
+        print("Error: No models selected for training. Please specify at least one model to train.")
+        print("Available options: --train_vqvae, --train_softvqvae, --train_orthovae")
+        return
     
     print("Starting ablation experiment...")
-    print(f"Models: {list(models.keys())}")
+    print(f"Selected models: {list(models.keys())}")
     
     # Train models
     results_dict = {}
