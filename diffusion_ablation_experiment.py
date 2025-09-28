@@ -294,7 +294,7 @@ def main():
     print("="*50)
 
     # 加载冻结的 SoftVQVAE 模型
-    softvqvae = SoftVQVAE(in_channels=3, h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25,temperature=0.5).to(device)
+    softvqvae = SoftVQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25,temperature=0.5).to(device)
     softvqvae.load_state_dict(torch.load(args.softvqvae_model_path, map_location=device))
     softvqvae.eval()
     print("Loaded frozen SoftVQVAE model.")
@@ -318,7 +318,7 @@ def main():
     print("="*50)
 
     # 加载冻结的 VQVAE 模型
-    vqvae = VQVAE(in_channels=3, h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25).to(device)
+    vqvae = VQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25).to(device)
     vqvae.load_state_dict(torch.load(args.vqvae_model_path, map_location=device))
     vqvae.eval()
     print("Loaded frozen VQVAE model.")
