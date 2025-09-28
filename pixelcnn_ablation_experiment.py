@@ -312,6 +312,7 @@ def main():
     parser.add_argument("--n_embeddings", type=int, default=512)
     parser.add_argument("--img_dim", type=int, default=8)
     parser.add_argument("--n_layers", type=int, default=15)
+    parser.add_argument("--temperature", type=float, default=0.5, help="Temperature parameter for SoftVQVAE")
     
     # VQVAE model paths
     parser.add_argument("--vqvae_model_path", type=str, default=None)
@@ -353,7 +354,7 @@ def main():
         # Load SoftVQVAE
         softvqvae = SoftVQVAE(
             h_dim=128, res_h_dim=32, n_res_layers=2,
-            num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25, temperature=1.0
+            num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25, temperature=args.temperature
         ).to(device)
         softvqvae.load_state_dict(torch.load(args.softvqvae_model_path, map_location=device))
         vqvae_models['SoftVQVAE'] = softvqvae
@@ -364,7 +365,7 @@ def main():
         vqvae_models['VQVAE'] = VQVAE(128, 32, 2, args.n_embeddings, 64, 0.25).to(device)
         vqvae_models['SoftVQVAE'] = SoftVQVAE(
             h_dim=128, res_h_dim=32, n_res_layers=2,
-            num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25, temperature=1.0
+            num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25, temperature=args.temperature
         ).to(device)
         print("Using default VQVAE models")
     
