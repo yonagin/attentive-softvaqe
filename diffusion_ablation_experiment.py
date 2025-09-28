@@ -26,6 +26,9 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 from torchmetrics.image import StructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
+# 引入 OrthoVAE 模型
+from models.ortho_vae import OrthoVAE
+
 
 # ==============================================================================
 # 1. VQVAE + PixelCNN 部分 (大部分沿用原代码, 稍作调整)
@@ -131,25 +134,44 @@ def generate_with_pixelcnn(pixelcnn_model, vqvae_model, num_samples, latent_shap
 
 
 # ==============================================================================
-# 2. SoftVQVAE + Diffusion Model 部分 (全新实现)
+# 2. 通用潜向量提取 + Diffusion Model 部分
 # ==============================================================================
 
-def extract_continuous_latents_softvqvae(model, data_loader, device, save_dir=None):
+def extract_continuous_latents(model, model_type, data_loader, device, save_dir=None):
     """
-    专门为 SoftVQVAE 提取量化后的隐向量 z_q，并进行标准化处理。
-    zq空间是结构化的，更适合训练扩散模型。
+    通用潜向量提取函数，支持 ortho_vae 和 softvqvae 两种模型。
+    
+    Args:
+        model: 预训练的模型
+        model_type: 模型类型，'ortho_vae' 或 'softvqvae'
+        data_loader: 数据加载器
+        device: 设备
+        save_dir: 保存目录
+    
+    Returns:
+        standardized_latents: 标准化后的潜向量
+        mean: 均值
+        std: 标准差
     """
     model.eval()
     all_latents = []
     
     with torch.no_grad():
-        for x, _ in tqdm(data_loader, desc="Extracting SoftVQVAE Latents"):
+        for x, _ in tqdm(data_loader, desc=f"Extracting {model_type} Latents"):
             x = x.to(device)
-            z_e = model.encoder(x)
-            z_e = model.pre_quantization_conv(z_e)
-            # 提取量化后的潜变量 z_q，而不是量化前的 z_e
-            z_q, _ = model.quantizer(z_e)
-            all_latents.append(z_q.cpu())
+            
+            if model_type == 'softvqvae':
+                # SoftVQVAE: 提取量化后的潜变量 z_q
+                z_e = model.encoder(x)
+                z_e = model.pre_quantization_conv(z_e)
+                z_q, _ = model.quantizer(z_e)
+                all_latents.append(z_q.cpu())
+            elif model_type == 'ortho_vae':
+                # OrthoVAE: 使用 encode 方法获取坐标表示
+                coordinates = model.encode(x)
+                all_latents.append(coordinates.cpu())
+            else:
+                raise ValueError(f"Unsupported model type: {model_type}")
     
     all_latents = torch.cat(all_latents, dim=0)
     
@@ -264,13 +286,23 @@ def train_diffusion_model(latent_dataset, save_path, args):
     return pipeline
 
 
-def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, device, z_stats_path=None):
+def generate_with_diffusion(diffusion_pipeline, model, model_type, num_samples, device, z_stats_path=None):
     """
-    使用扩散模型生成隐向量, 并用 SoftVQVAE 模型进行解码.
-    扩散模型在zq空间上训练，直接生成zq空间数据。
-    如果提供了标准化参数路径，则进行逆标准化处理。
+    使用扩散模型生成隐向量, 并用相应的模型进行解码.
+    支持 ortho_vae 和 softvqvae 两种模型。
+    
+    Args:
+        diffusion_pipeline: 训练好的扩散模型pipeline
+        model: 预训练的模型
+        model_type: 模型类型，'ortho_vae' 或 'softvqvae'
+        num_samples: 生成样本数量
+        device: 设备
+        z_stats_path: 标准化参数路径
+    
+    Returns:
+        generated_images: 生成的图像
     """
-    softvqvae_model.eval()
+    model.eval()
     
     # 加载标准化参数（如果存在）
     if z_stats_path is not None and os.path.exists(z_stats_path):
@@ -283,8 +315,7 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, de
         std = None
         print("No latent space statistics found. Using generated latents as-is.")
     
-    # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成去噪后的隐向量 z_q
-    # 使用正确的pipeline调用方式
+    # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成去噪后的隐向量
     with torch.no_grad():
         output = diffusion_pipeline(
             batch_size=num_samples,
@@ -294,31 +325,34 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, de
         
         # 确保返回的是PyTorch张量
         if hasattr(output, 'images'):
-            generated_z_q = output.images
+            generated_latents = output.images
         else:
-            generated_z_q = output
+            generated_latents = output
         
         # 如果返回的是numpy数组，转换为PyTorch张量
-        if isinstance(generated_z_q, np.ndarray):
-            generated_z_q = torch.from_numpy(generated_z_q)
+        if isinstance(generated_latents, np.ndarray):
+            generated_latents = torch.from_numpy(generated_latents)
     
     # 确保张量在正确的设备上
-    generated_z_q = generated_z_q.to(device)
+    generated_latents = generated_latents.to(device)
     
     # 检查并调整维度顺序
-    if len(generated_z_q.shape) == 4:
+    if len(generated_latents.shape) == 4:
         # 如果维度是 [batch_size, height, width, channels]，需要转换为 [batch_size, channels, height, width]
-        if generated_z_q.shape[-1] == 64:  # channels维度在最后
-            generated_z_q = generated_z_q.permute(0, 3, 1, 2)
+        if generated_latents.shape[-1] == 64:  # channels维度在最后
+            generated_latents = generated_latents.permute(0, 3, 1, 2)
     
     # 2. 如果存在标准化参数，进行逆标准化
     if mean is not None and std is not None:
-        generated_z_q = generated_z_q * std + mean
+        generated_latents = generated_latents * std + mean
         print("Applied denormalization to generated latents.")
     
-    # 3. 将生成的 z_q 直接输入解码器得到最终图像
+    # 3. 将生成的潜向量输入解码器得到最终图像
     with torch.no_grad():
-        generated_images = softvqvae_model.decoder(generated_z_q)
+        if model_type == 'softvqvae' or model_type == 'ortho_vae':
+            generated_images = model.decoder(generated_latents)
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
         
     return generated_images
 
@@ -403,6 +437,9 @@ def main():
     parser.add_argument("--dataset", type=str, default='CIFAR10')
     parser.add_argument("--vqvae_model_path", type=str, required=True, help="Path to pre-trained VQVAE model.")
     parser.add_argument("--softvqvae_model_path", type=str, required=True, help="Path to pre-trained SoftVQVAE model.")
+    parser.add_argument("--ortho_vae_model_path", type=str, default=None, help="Path to pre-trained OrthoVAE model.")
+    parser.add_argument("--latent_source", type=str, default='softvqvae', choices=['softvqvae', 'ortho_vae'], 
+                        help="Source of latent vectors for diffusion training: 'softvqvae' or 'ortho_vae'.")
     parser.add_argument("--save_dir", type=str, default='ablation_results')
     parser.add_argument("--n_embeddings", type=int, default=512, help="Number of embeddings in VQ codebook.")
     parser.add_argument("--num_samples_to_generate", type=int, default=64, help="Number of images to generate for visualization.")
@@ -418,6 +455,10 @@ def main():
     parser.add_argument("--diffusion_lr", type=float, default=1e-4, help="Learning rate for Diffusion Model.")
 
     args = parser.parse_args()
+    
+    # 验证参数
+    if args.latent_source == 'ortho_vae' and args.ortho_vae_model_path is None:
+        raise ValueError("When using ortho_vae as latent source, --ortho_vae_model_path must be provided.")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -480,56 +521,64 @@ def main():
     print(f"  SSIM: {vqvae_quality['ssim']:.4f}")
     print(f"  LPIPS: {vqvae_quality['lpips']:.4f}")
 
-    # --- Pipeline 2: SoftVQVAE + Diffusion Model ---
+    # --- Pipeline 2: VAE + Diffusion Model ---
     print("\n" + "="*50)
-    print("=== Pipeline 2: SoftVQVAE + Diffusion Model ===")
+    print(f"=== Pipeline 2: {args.latent_source.upper()} + Diffusion Model ===")
     print("="*50)
 
-    # 加载冻结的 SoftVQVAE 模型
-    softvqvae = SoftVQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25,temperature=0.5).to(device)
-    softvqvae.load_state_dict(torch.load(args.softvqvae_model_path, map_location=device))
-    softvqvae.eval()
-    print("Loaded frozen SoftVQVAE model.")
+    # 根据选择的潜向量来源加载相应的模型
+    if args.latent_source == 'softvqvae':
+        # 加载冻结的 SoftVQVAE 模型
+        model = SoftVQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25,temperature=0.5).to(device)
+        model.load_state_dict(torch.load(args.softvqvae_model_path, map_location=device))
+        print("Loaded frozen SoftVQVAE model.")
+    elif args.latent_source == 'ortho_vae':
+        # 加载冻结的 OrthoVAE 模型
+        model = OrthoVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, ortho_weight=0.1, entropy_weight=0.1).to(device)
+        model.load_state_dict(torch.load(args.ortho_vae_model_path, map_location=device))
+        print("Loaded frozen OrthoVAE model.")
+    
+    model.eval()
     
     # 1. 创建连续隐空间数据集并进行标准化
-    continuous_latents, mean, std = extract_continuous_latents_softvqvae(softvqvae, training_loader, device, save_dir)
-    print(f"SoftVQVAE standardized continuous latent dataset created. Shape: {continuous_latents.shape}")
+    continuous_latents, mean, std = extract_continuous_latents(model, args.latent_source, training_loader, device, save_dir)
+    print(f"{args.latent_source.upper()} standardized continuous latent dataset created. Shape: {continuous_latents.shape}")
     print(f"Latent space statistics - Mean: {mean.mean().item():.4f}, Std: {std.mean().item():.4f}")
 
     # 2. 训练 Diffusion Model 先验模型
-    diffusion_save_path = os.path.join(save_dir, "diffusion_pipeline_on_softvqvae")
+    diffusion_save_path = os.path.join(save_dir, f"diffusion_pipeline_on_{args.latent_source}")
     diffusion_pipeline = train_diffusion_model(continuous_latents, diffusion_save_path, args)
     
     # 3. 生成新图片（使用标准化参数进行逆标准化）
     z_stats_path = os.path.join(save_dir, 'z_stats.pth')
-    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae, args.num_samples_to_generate, device, z_stats_path)
-    save_image(generated_images_softvqvae.data.cpu(), os.path.join(save_dir, 'generated_by_diffusion.png'), nrow=8, normalize=True)
-    print("Generated images from SoftVQVAE+Diffusion pipeline and saved.")
+    generated_images = generate_with_diffusion(diffusion_pipeline, model, args.latent_source, args.num_samples_to_generate, device, z_stats_path)
+    save_image(generated_images.data.cpu(), os.path.join(save_dir, f'generated_by_diffusion_{args.latent_source}.png'), nrow=8, normalize=True)
+    print(f"Generated images from {args.latent_source.upper()}+Diffusion pipeline and saved.")
 
-    # 4. 评估 SoftVQVAE+Diffusion 生成图像质量
-    print("Evaluating SoftVQVAE+Diffusion image quality...")
-    real_images_softvqvae = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
-    softvqvae_quality = evaluate_image_quality(real_images_softvqvae, generated_images_softvqvae, device)
+    # 4. 评估生成图像质量
+    print(f"Evaluating {args.latent_source.upper()}+Diffusion image quality...")
+    real_images = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
+    quality_metrics = evaluate_image_quality(real_images, generated_images, device)
     
     # 保存评估结果
-    with open(os.path.join(save_dir, 'softvqvae_diffusion_quality.json'), 'w') as f:
-        json.dump(softvqvae_quality, f, indent=2)
+    with open(os.path.join(save_dir, f'{args.latent_source}_diffusion_quality.json'), 'w') as f:
+        json.dump(quality_metrics, f, indent=2)
     
-    print("SoftVQVAE+Diffusion Quality Metrics:")
-    print(f"  MSE: {softvqvae_quality['mse']:.6f}")
-    print(f"  PSNR: {softvqvae_quality['psnr']:.2f} dB")
-    print(f"  SSIM: {softvqvae_quality['ssim']:.4f}")
-    print(f"  LPIPS: {softvqvae_quality['lpips']:.4f}")
+    print(f"{args.latent_source.upper()}+Diffusion Quality Metrics:")
+    print(f"  MSE: {quality_metrics['mse']:.6f}")
+    print(f"  PSNR: {quality_metrics['psnr']:.2f} dB")
+    print(f"  SSIM: {quality_metrics['ssim']:.4f}")
+    print(f"  LPIPS: {quality_metrics['lpips']:.4f}")
 
     # 比较两个pipeline的结果
     print("\n" + "="*50)
     print("=== Pipeline Comparison ===")
     print("="*50)
-    print("VQVAE+PixelCNN vs SoftVQVAE+Diffusion:")
-    print(f"MSE:     {vqvae_quality['mse']:.6f} vs {softvqvae_quality['mse']:.6f}")
-    print(f"PSNR:    {vqvae_quality['psnr']:.2f} dB vs {softvqvae_quality['psnr']:.2f} dB")
-    print(f"SSIM:    {vqvae_quality['ssim']:.4f} vs {softvqvae_quality['ssim']:.4f}")
-    print(f"LPIPS:   {vqvae_quality['lpips']:.4f} vs {softvqvae_quality['lpips']:.4f}")
+    print(f"VQVAE+PixelCNN vs {args.latent_source.upper()}+Diffusion:")
+    print(f"MSE:     {vqvae_quality['mse']:.6f} vs {quality_metrics['mse']:.6f}")
+    print(f"PSNR:    {vqvae_quality['psnr']:.2f} dB vs {quality_metrics['psnr']:.2f} dB")
+    print(f"SSIM:    {vqvae_quality['ssim']:.4f} vs {quality_metrics['ssim']:.4f}")
+    print(f"LPIPS:   {vqvae_quality['lpips']:.4f} vs {quality_metrics['lpips']:.4f}")
 
     print("\n" + "="*50)
     print(f"Ablation study complete! All results saved in: {save_dir}")
@@ -537,7 +586,8 @@ def main():
 
 
 if __name__ == "__main__":
-    # 确保你的 VQVAE/SoftVQVAE 模型定义和 utils.py 文件在同一个目录下或在 Python 路径中
+    # 确保你的 VQVAE/SoftVQVAE/OrthoVAE 模型定义和 utils.py 文件在同一个目录下或在 Python 路径中
     # 示例运行命令:
-    # python your_script_name.py --vqvae_model_path ./models/vqvae.pth --softvqvae_model_path ./models/soft_vqvae.pth
+    # python your_script_name.py --vqvae_model_path ./models/vqvae.pth --softvqvae_model_path ./models/soft_vqvae.pth --latent_source softvqvae
+    # python your_script_name.py --vqvae_model_path ./models/vqvae.pth --ortho_vae_model_path ./models/ortho_vae.pth --latent_source ortho_vae
     main()

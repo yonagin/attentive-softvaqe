@@ -369,11 +369,11 @@ def main():
     parser.add_argument("--n_residual_layers", type=int, default=2)
     parser.add_argument("--embedding_dim", type=int, default=64)
     parser.add_argument("--n_embeddings", type=int, default=512)
-    parser.add_argument("--beta", type=float, default=.25)
+    parser.add_argument("--beta", type=float, default=0.25)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--log_interval", type=int, default=50)
     parser.add_argument("--dataset", type=str, default='CIFAR10')
-    parser.add_argument("--soft_temperature", type=float, default=1.0)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--noise_std", type=float, default=0.0, help="Standard deviation of Gaussian noise to add to quantized latent vectors for SoftVQVAE")
     
     # Model selection parameters
@@ -419,7 +419,7 @@ def main():
             num_embeddings=args.n_embeddings,
             embedding_dim=args.embedding_dim,
             beta=args.beta,
-            temperature=args.soft_temperature
+            temperature=args.temperature
         ).to(device)
     
     if args.train_orthovae:
