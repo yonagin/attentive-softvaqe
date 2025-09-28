@@ -21,6 +21,11 @@ from torch.utils.data import TensorDataset, DataLoader
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
+# 图像质量评估指标
+# pip install torchmetrics
+from torchmetrics.image import StructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+
 
 # ==============================================================================
 # 1. VQVAE + PixelCNN 部分 (大部分沿用原代码, 稍作调整)
@@ -131,7 +136,7 @@ def generate_with_pixelcnn(pixelcnn_model, vqvae_model, num_samples, latent_shap
 
 def extract_continuous_latents_softvqvae(model, data_loader, device):
     """
-    专门为 SoftVQVAE 提取连续的隐向量 z_q.
+    专门为 SoftVQVAE 提取进入量化层的隐向量 z_e.
     """
     model.eval()
     all_latents = []
@@ -139,10 +144,10 @@ def extract_continuous_latents_softvqvae(model, data_loader, device):
     with torch.no_grad():
         for x, _ in tqdm(data_loader, desc="Extracting SoftVQVAE Latents"):
             x = x.to(device)
-            z = model.encoder(x)
-            z = model.pre_quantization_conv(z)
-            z_q, _ = model.quantizer(z) # 获取连续的 z_q
-            all_latents.append(z_q.cpu())
+            z_e = model.encoder(x)
+            z_e = model.pre_quantization_conv(z_e)
+            # 提取进入量化层的潜变量 z_e，而不是量化后的 z_q
+            all_latents.append(z_e.cpu())
             
     return torch.cat(all_latents, dim=0)
 
@@ -163,12 +168,12 @@ def train_diffusion_model(latent_dataset, save_path, args):
         in_channels=C,
         out_channels=C,
         layers_per_block=2,
-        block_out_channels=(64, 128, 256), # 减少通道层级以适应小尺寸输入
+        block_out_channels=(64, 128), # 减少通道层级以适应小尺寸输入
         down_block_types=(
-            "DownBlock2D", "DownBlock2D", "AttnDownBlock2D"
+            "DownBlock2D", "DownBlock2D",
         ),
         up_block_types=(
-            "AttnUpBlock2D", "UpBlock2D", "UpBlock2D"
+            "UpBlock2D", "UpBlock2D"
         ),
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -235,13 +240,13 @@ def train_diffusion_model(latent_dataset, save_path, args):
     return pipeline
 
 
-def generate_with_diffusion(diffusion_pipeline, softvqvae_decoder, num_samples, device):
+def generate_with_diffusion(diffusion_pipeline, softvqvae_model, num_samples, device):
     """
-    使用扩散模型生成隐向量, 并用 SoftVQVAE 解码器解码.
+    使用扩散模型生成隐向量, 并用 SoftVQVAE 模型进行量化和解码.
     """
-    softvqvae_decoder.eval()
+    softvqvae_model.eval()
     
-    # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成隐向量 z_0
+    # 1. 从纯噪声开始, 使用扩散模型 pipeline 生成去噪后的隐向量 z_e
     # 使用正确的pipeline调用方式
     with torch.no_grad():
         output = diffusion_pipeline(
@@ -252,28 +257,82 @@ def generate_with_diffusion(diffusion_pipeline, softvqvae_decoder, num_samples, 
         
         # 确保返回的是PyTorch张量
         if hasattr(output, 'images'):
-            generated_latents = output.images
+            generated_z_e = output.images
         else:
-            generated_latents = output
+            generated_z_e = output
         
         # 如果返回的是numpy数组，转换为PyTorch张量
-        if isinstance(generated_latents, np.ndarray):
-            generated_latents = torch.from_numpy(generated_latents)
+        if isinstance(generated_z_e, np.ndarray):
+            generated_z_e = torch.from_numpy(generated_z_e)
     
     # 确保张量在正确的设备上
-    generated_latents = generated_latents.to(device)
+    generated_z_e = generated_z_e.to(device)
     
     # 检查并调整维度顺序
-    if len(generated_latents.shape) == 4:
+    if len(generated_z_e.shape) == 4:
         # 如果维度是 [batch_size, height, width, channels]，需要转换为 [batch_size, channels, height, width]
-        if generated_latents.shape[-1] == 64:  # channels维度在最后
-            generated_latents = generated_latents.permute(0, 3, 1, 2)
+        if generated_z_e.shape[-1] == 64:  # channels维度在最后
+            generated_z_e = generated_z_e.permute(0, 3, 1, 2)
     
-    # 2. 将生成的隐向量喂给冻结的解码器
+    # 2. 将生成的 z_e 输入量化层得到 z_q
     with torch.no_grad():
-        generated_images = softvqvae_decoder(generated_latents)
+        z_q, _ = softvqvae_model.quantizer(generated_z_e)
+        
+    # 3. 将量化后的 z_q 输入解码器得到最终图像
+    with torch.no_grad():
+        generated_images = softvqvae_model.decoder(z_q)
         
     return generated_images
+
+
+def evaluate_image_quality(real_images, generated_images, device):
+    """
+    评估生成图像的质量
+    """
+    # 确保图像在正确的设备上
+    real_images = real_images.to(device)
+    generated_images = generated_images.to(device)
+    
+    # 初始化评估指标
+    ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
+    psnr = PeakSignalNoiseRatio(data_range=1.0).to(device)
+    lpips = LearnedPerceptualImagePatchSimilarity(net_type='vgg').to(device)
+    
+    # 计算指标
+    ssim_score = ssim(generated_images, real_images)
+    psnr_score = psnr(generated_images, real_images)
+    lpips_score = lpips(generated_images, real_images)
+    
+    # 计算MSE
+    mse = F.mse_loss(generated_images, real_images)
+    
+    return {
+        'mse': mse.item(),
+        'psnr': psnr_score.item(),
+        'ssim': ssim_score.item(),
+        'lpips': lpips_score.item()
+    }
+
+
+def get_sample_real_images(data_loader, num_samples, device):
+    """
+    从数据加载器中获取真实图像样本用于评估
+    """
+    real_images = []
+    for batch_idx, (x, _) in enumerate(data_loader):
+        if len(real_images) >= num_samples:
+            break
+        x = x.to(device)
+        real_images.append(x)
+    
+    # 如果获取的样本不足，重复使用最后一个batch
+    if len(real_images) < num_samples:
+        remaining = num_samples - len(real_images)
+        last_batch = real_images[-1][:remaining]
+        real_images.append(last_batch)
+    
+    real_images = torch.cat(real_images, dim=0)[:num_samples]
+    return real_images
 
 
 # ==============================================================================
@@ -308,8 +367,7 @@ def main():
     print(f"Using device: {device}")
     
     # 创建保存目录
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = os.path.join(args.save_dir, timestamp)
+    save_dir = args.save_dir
     os.makedirs(save_dir, exist_ok=True)
     with open(os.path.join(save_dir, 'config.json'), 'w') as f:
         json.dump(vars(args), f, indent=2)
@@ -351,6 +409,21 @@ def main():
     save_image(generated_images_vqvae.data.cpu(), os.path.join(save_dir, 'generated_by_pixelcnn.png'), nrow=8, normalize=True)
     print("Generated images from VQVAE+PixelCNN pipeline and saved.")
 
+    # 4. 评估 VQVAE+PixelCNN 生成图像质量
+    print("Evaluating VQVAE+PixelCNN image quality...")
+    real_images_vqvae = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
+    vqvae_quality = evaluate_image_quality(real_images_vqvae, generated_images_vqvae, device)
+    
+    # 保存评估结果
+    with open(os.path.join(save_dir, 'vqvae_pixelcnn_quality.json'), 'w') as f:
+        json.dump(vqvae_quality, f, indent=2)
+    
+    print("VQVAE+PixelCNN Quality Metrics:")
+    print(f"  MSE: {vqvae_quality['mse']:.6f}")
+    print(f"  PSNR: {vqvae_quality['psnr']:.2f} dB")
+    print(f"  SSIM: {vqvae_quality['ssim']:.4f}")
+    print(f"  LPIPS: {vqvae_quality['lpips']:.4f}")
+
     # --- Pipeline 2: SoftVQVAE + Diffusion Model ---
     print("\n" + "="*50)
     print("=== Pipeline 2: SoftVQVAE + Diffusion Model ===")
@@ -371,9 +444,34 @@ def main():
     diffusion_pipeline = train_diffusion_model(continuous_latents, diffusion_save_path, args)
     
     # 3. 生成新图片
-    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae.decoder, args.num_samples_to_generate, device)
+    generated_images_softvqvae = generate_with_diffusion(diffusion_pipeline, softvqvae, args.num_samples_to_generate, device)
     save_image(generated_images_softvqvae.data.cpu(), os.path.join(save_dir, 'generated_by_diffusion.png'), nrow=8, normalize=True)
     print("Generated images from SoftVQVAE+Diffusion pipeline and saved.")
+
+    # 4. 评估 SoftVQVAE+Diffusion 生成图像质量
+    print("Evaluating SoftVQVAE+Diffusion image quality...")
+    real_images_softvqvae = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
+    softvqvae_quality = evaluate_image_quality(real_images_softvqvae, generated_images_softvqvae, device)
+    
+    # 保存评估结果
+    with open(os.path.join(save_dir, 'softvqvae_diffusion_quality.json'), 'w') as f:
+        json.dump(softvqvae_quality, f, indent=2)
+    
+    print("SoftVQVAE+Diffusion Quality Metrics:")
+    print(f"  MSE: {softvqvae_quality['mse']:.6f}")
+    print(f"  PSNR: {softvqvae_quality['psnr']:.2f} dB")
+    print(f"  SSIM: {softvqvae_quality['ssim']:.4f}")
+    print(f"  LPIPS: {softvqvae_quality['lpips']:.4f}")
+
+    # 比较两个pipeline的结果
+    print("\n" + "="*50)
+    print("=== Pipeline Comparison ===")
+    print("="*50)
+    print("VQVAE+PixelCNN vs SoftVQVAE+Diffusion:")
+    print(f"MSE:     {vqvae_quality['mse']:.6f} vs {softvqvae_quality['mse']:.6f}")
+    print(f"PSNR:    {vqvae_quality['psnr']:.2f} dB vs {softvqvae_quality['psnr']:.2f} dB")
+    print(f"SSIM:    {vqvae_quality['ssim']:.4f} vs {softvqvae_quality['ssim']:.4f}")
+    print(f"LPIPS:   {vqvae_quality['lpips']:.4f} vs {softvqvae_quality['lpips']:.4f}")
 
     print("\n" + "="*50)
     print(f"Ablation study complete! All results saved in: {save_dir}")

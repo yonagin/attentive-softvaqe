@@ -356,8 +356,7 @@ def main():
     print(f"Using device: {device}")
     
     # Create save directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = os.path.join(args.save_dir, timestamp)
+    save_dir = args.save_dir
     os.makedirs(save_dir, exist_ok=True)
     
     # Save experiment configuration
