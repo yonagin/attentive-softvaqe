@@ -285,7 +285,7 @@ def main():
     
     # 加载数据
     training_data, _, training_loader, _, _ = utils.load_data_and_data_loaders(
-        args.dataset, args.batch_size, num_workers=4)
+        args.dataset, args.batch_size)
 
 
     # --- Pipeline 2: SoftVQVAE + Diffusion Model ---
