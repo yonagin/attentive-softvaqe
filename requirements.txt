@@ -11,3 +11,7 @@ torch
 torchvision
 scipy
 lpips==0.1.4
+diffusers
+transformers
+accelerate
+xformers
