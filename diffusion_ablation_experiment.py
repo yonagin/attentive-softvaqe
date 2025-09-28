@@ -293,17 +293,35 @@ def evaluate_image_quality(real_images, generated_images, device):
     real_images = real_images.to(device)
     generated_images = generated_images.to(device)
     
+    # 调试信息：检查图像值范围
+    print(f"Real images range: [{real_images.min().item():.4f}, {real_images.max().item():.4f}]")
+    print(f"Generated images range: [{generated_images.min().item():.4f}, {generated_images.max().item():.4f}]")
+    
+    # 首先将图像值范围归一化到[0, 1]
+    real_images_normalized = (real_images - real_images.min()) / (real_images.max() - real_images.min())
+    generated_images_normalized = (generated_images - generated_images.min()) / (generated_images.max() - generated_images.min())
+    
+    # 然后将图像值范围归一化到[-1, 1]用于LPIPS计算
+    real_images_lpips = real_images_normalized * 2 - 1
+    generated_images_lpips = generated_images_normalized * 2 - 1
+    
+    # 检查归一化后的范围
+    print(f"Normalized real images range: [{real_images_normalized.min().item():.4f}, {real_images_normalized.max().item():.4f}]")
+    print(f"Normalized generated images range: [{generated_images_normalized.min().item():.4f}, {generated_images_normalized.max().item():.4f}]")
+    print(f"LPIPS real images range: [{real_images_lpips.min().item():.4f}, {real_images_lpips.max().item():.4f}]")
+    print(f"LPIPS generated images range: [{generated_images_lpips.min().item():.4f}, {generated_images_lpips.max().item():.4f}]")
+    
     # 初始化评估指标
     ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
     psnr = PeakSignalNoiseRatio(data_range=1.0).to(device)
     lpips = LearnedPerceptualImagePatchSimilarity(net_type='vgg').to(device)
     
     # 计算指标
-    ssim_score = ssim(generated_images, real_images)
-    psnr_score = psnr(generated_images, real_images)
-    lpips_score = lpips(generated_images, real_images)
+    ssim_score = ssim(generated_images_normalized, real_images_normalized)
+    psnr_score = psnr(generated_images_normalized, real_images_normalized)
+    lpips_score = lpips(generated_images_lpips, real_images_lpips)
     
-    # 计算MSE
+    # 计算MSE（使用原始图像）
     mse = F.mse_loss(generated_images, real_images)
     
     return {
