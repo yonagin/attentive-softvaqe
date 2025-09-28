@@ -456,23 +456,7 @@ def main():
     
     # 1. 创建连续隐空间数据集
     continuous_latents = extract_continuous_latents_softvqvae(softvqvae, training_loader, device)
-    print(f"Latent value range: MIN={continuous_latents.min().item()}, MAX={continuous_latents.max().item()}")
-    print(f"Latent value mean: {continuous_latents.mean().item()}, std: {continuous_latents.std().item()}")
     print(f"SoftVQVAE continuous latent dataset created. Shape: {continuous_latents.shape}")
-
-        # 对整个 latent dataset 操作
-    min_val = continuous_latents.min()
-    max_val = continuous_latents.max()
-
-    # 归一化到 [0, 1]
-    normalized_latents = (continuous_latents - min_val) / (max_val - min_val)
-    # 归一化到 [-1, 1]
-    normalized_latents = normalized_latents * 2.0 - 1.0
-
-    # 保存 min_val 和 max_val，后面生成的时候要用它们“反归一化”！
-    norm_stats = {"min": min_val.item(), "max": max_val.item()}
-    with open(os.path.join(save_dir, 'norm_stats.json'), 'w') as f:
-        json.dump(norm_stats, f)
 
     # 2. 训练 Diffusion Model 先验模型
     diffusion_save_path = os.path.join(save_dir, "diffusion_pipeline_on_softvqvae")
