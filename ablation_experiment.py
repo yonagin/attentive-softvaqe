@@ -43,7 +43,7 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
         optimizer.zero_grad()
         
         # Use the appropriate loss computation method based on model type
-        if hasattr(model, 'loss'):
+        if isinstance(model, SoftVQVAE):
             # For SoftVQVAE with new interface (using forward method with return_loss=True)
             total_loss, recon_loss, codebook_loss, _ = model(x, return_loss=True)
             # For compatibility with existing code, set embedding_loss to codebook_loss
