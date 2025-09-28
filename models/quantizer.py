@@ -51,9 +51,21 @@ class SoftVectorQuantizer(nn.Module):
         # preserve gradients
         z_q = z + (z_q - z).detach()
 
-        # perplexity
-        e_mean = torch.mean(soft_assignments, dim=0)
-        perplexity = torch.exp(-torch.sum(e_mean * torch.log(e_mean + 1e-10)))
+        # perplexity for soft assignments
+        # For soft assignments, we need a different perplexity calculation
+        # that measures the effective number of codes being used
+        
+        # Method 1: Entropy-based perplexity (more appropriate for soft assignments)
+        # This measures the exponential of the entropy of the average distribution
+        avg_probs = torch.mean(soft_assignments, dim=0)
+        entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-10))
+        perplexity = torch.exp(entropy)
+        
+        # Method 2: Alternative - measure how "peaked" the distributions are
+        # This gives a measure of how concentrated the assignments are
+        # max_probs = torch.max(soft_assignments, dim=1)[0]
+        # avg_max_prob = torch.mean(max_probs)
+        # perplexity = 1.0 / avg_max_prob  # Inverse of average maximum probability
 
         # reshape back to match original input shape
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
