@@ -336,12 +336,6 @@ def generate_with_diffusion(diffusion_pipeline, model, model_type, num_samples, 
     # 确保张量在正确的设备上
     generated_latents = generated_latents.to(device)
     
-    # 检查并调整维度顺序
-    if len(generated_latents.shape) == 4:
-        # 如果维度是 [batch_size, height, width, channels]，需要转换为 [batch_size, channels, height, width]
-        if generated_latents.shape[-1] == 64:  # channels维度在最后
-            generated_latents = generated_latents.permute(0, 3, 1, 2)
-    
     # 2. 如果存在标准化参数，进行逆标准化
     if mean is not None and std is not None:
         generated_latents = generated_latents * std + mean
@@ -476,54 +470,6 @@ def main():
     training_data, _, training_loader, _, _ = utils.load_data_and_data_loaders(
         args.dataset, args.batch_size)
 
-    
-     # --- Pipeline 1: VQVAE + PixelCNN ---
-    print("\n" + "="*50)
-    print("=== Pipeline 1: VQVAE + GatedPixelCNN ===")
-    print("="*50)
-
-    # 加载冻结的 VQVAE 模型
-    vqvae = VQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=args.embedding_dim, beta=0.25).to(device)
-    vqvae.load_state_dict(torch.load(args.vqvae_model_path, map_location=device))
-    vqvae.eval()
-    print("Loaded frozen VQVAE model.")
-
-    # 1. 创建离散隐空间数据集（包含标签）
-    discrete_latents, labels = extract_discrete_latents_vqvae(vqvae, training_loader, device)
-    latent_shape_vqvae = discrete_latents.shape[1:] # e.g. (8, 8) or (32, 32)
-    print(f"VQVAE discrete latent dataset created. Shape: {discrete_latents.shape}")
-
-    # 2. 训练 PixelCNN 先验模型
-    pixelcnn = GatedPixelCNN(input_dim=args.n_embeddings, dim=args.img_dim, n_layers=args.n_layers, n_classes=10).to(device)
-    latent_dataset_vqvae = TensorDataset(discrete_latents, labels)
-    latent_loader_vqvae = DataLoader(latent_dataset_vqvae, batch_size=args.batch_size, shuffle=True)
-    pixelcnn = train_pixelcnn(pixelcnn, "VQVAE", latent_loader_vqvae, None, args, device)
-    
-    # 保存 PixelCNN 模型
-    pixelcnn_save_path = os.path.join(save_dir, "pixelcnn_on_vqvae.pth")
-    torch.save(pixelcnn.state_dict(), pixelcnn_save_path)
-    print(f"PixelCNN model saved to {pixelcnn_save_path}")
-
-    # 3. 生成新图片
-    generated_images_vqvae = generate_with_pixelcnn(pixelcnn, vqvae, args.num_samples_to_generate, latent_shape_vqvae, device)
-    save_image(generated_images_vqvae.data.cpu(), os.path.join(save_dir, 'generated_by_pixelcnn.png'), nrow=8, normalize=True)
-    print("Generated images from VQVAE+PixelCNN pipeline and saved.")
-
-    # 4. 评估 VQVAE+PixelCNN 生成图像质量
-    print("Evaluating VQVAE+PixelCNN image quality...")
-    real_images_vqvae = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
-    vqvae_quality = evaluate_image_quality(real_images_vqvae, generated_images_vqvae, device)
-    
-    # 保存评估结果
-    with open(os.path.join(save_dir, 'vqvae_pixelcnn_quality.json'), 'w') as f:
-        json.dump(vqvae_quality, f, indent=2)
-    
-    print("VQVAE+PixelCNN Quality Metrics:")
-    print(f"  MSE: {vqvae_quality['mse']:.6f}")
-    print(f"  PSNR: {vqvae_quality['psnr']:.2f} dB")
-    print(f"  SSIM: {vqvae_quality['ssim']:.4f}")
-    print(f"  LPIPS: {vqvae_quality['lpips']:.4f}")
-
     # --- Pipeline 2: VAE + Diffusion Model ---
     print("\n" + "="*50)
     print(f"=== Pipeline 2: {args.latent_source.upper()} + Diffusion Model ===")
@@ -573,6 +519,53 @@ def main():
     print(f"  SSIM: {quality_metrics['ssim']:.4f}")
     print(f"  LPIPS: {quality_metrics['lpips']:.4f}")
 
+     # --- Pipeline 1: VQVAE + PixelCNN ---
+    print("\n" + "="*50)
+    print("=== Pipeline 1: VQVAE + GatedPixelCNN ===")
+    print("="*50)
+
+    # 加载冻结的 VQVAE 模型
+    vqvae = VQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=args.embedding_dim, beta=0.25).to(device)
+    vqvae.load_state_dict(torch.load(args.vqvae_model_path, map_location=device))
+    vqvae.eval()
+    print("Loaded frozen VQVAE model.")
+
+    # 1. 创建离散隐空间数据集（包含标签）
+    discrete_latents, labels = extract_discrete_latents_vqvae(vqvae, training_loader, device)
+    latent_shape_vqvae = discrete_latents.shape[1:] # e.g. (8, 8) or (32, 32)
+    print(f"VQVAE discrete latent dataset created. Shape: {discrete_latents.shape}")
+
+    # 2. 训练 PixelCNN 先验模型
+    pixelcnn = GatedPixelCNN(input_dim=args.n_embeddings, dim=args.img_dim, n_layers=args.n_layers, n_classes=10).to(device)
+    latent_dataset_vqvae = TensorDataset(discrete_latents, labels)
+    latent_loader_vqvae = DataLoader(latent_dataset_vqvae, batch_size=args.batch_size, shuffle=True)
+    pixelcnn = train_pixelcnn(pixelcnn, "VQVAE", latent_loader_vqvae, None, args, device)
+    
+    # 保存 PixelCNN 模型
+    pixelcnn_save_path = os.path.join(save_dir, "pixelcnn_on_vqvae.pth")
+    torch.save(pixelcnn.state_dict(), pixelcnn_save_path)
+    print(f"PixelCNN model saved to {pixelcnn_save_path}")
+
+    # 3. 生成新图片
+    generated_images_vqvae = generate_with_pixelcnn(pixelcnn, vqvae, args.num_samples_to_generate, latent_shape_vqvae, device)
+    save_image(generated_images_vqvae.data.cpu(), os.path.join(save_dir, 'generated_by_pixelcnn.png'), nrow=8, normalize=True)
+    print("Generated images from VQVAE+PixelCNN pipeline and saved.")
+
+    # 4. 评估 VQVAE+PixelCNN 生成图像质量
+    print("Evaluating VQVAE+PixelCNN image quality...")
+    real_images_vqvae = get_sample_real_images(training_loader, args.num_samples_to_generate, device)
+    vqvae_quality = evaluate_image_quality(real_images_vqvae, generated_images_vqvae, device)
+    
+    # 保存评估结果
+    with open(os.path.join(save_dir, 'vqvae_pixelcnn_quality.json'), 'w') as f:
+        json.dump(vqvae_quality, f, indent=2)
+    
+    print("VQVAE+PixelCNN Quality Metrics:")
+    print(f"  MSE: {vqvae_quality['mse']:.6f}")
+    print(f"  PSNR: {vqvae_quality['psnr']:.2f} dB")
+    print(f"  SSIM: {vqvae_quality['ssim']:.4f}")
+    print(f"  LPIPS: {vqvae_quality['lpips']:.4f}")
+
     # 比较两个pipeline的结果
     print("\n" + "="*50)
     print("=== Pipeline Comparison ===")
@@ -589,8 +582,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # 确保你的 VQVAE/SoftVQVAE/OrthoVAE 模型定义和 utils.py 文件在同一个目录下或在 Python 路径中
-    # 示例运行命令:
-    # python your_script_name.py --vqvae_model_path ./models/vqvae.pth --softvqvae_model_path ./models/soft_vqvae.pth --latent_source softvqvae
-    # python your_script_name.py --vqvae_model_path ./models/vqvae.pth --ortho_vae_model_path ./models/ortho_vae.pth --latent_source ortho_vae
     main()
