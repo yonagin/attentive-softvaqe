@@ -441,7 +441,8 @@ def main():
     parser.add_argument("--latent_source", type=str, default='softvqvae', choices=['softvqvae', 'ortho_vae'], 
                         help="Source of latent vectors for diffusion training: 'softvqvae' or 'ortho_vae'.")
     parser.add_argument("--save_dir", type=str, default='ablation_results')
-    parser.add_argument("--n_embeddings", type=int, default=512, help="Number of embeddings in VQ codebook.")
+    parser.add_argument("--n_embeddings", type=int, default=64, help="Number of embeddings in VQ codebook.")
+    parser.add_argument("--embedding_dim", type=int, default=128, help="Dimension of embedding vectors.")
     parser.add_argument("--num_samples_to_generate", type=int, default=64, help="Number of images to generate for visualization.")
 
     # PixelCNN 相关参数
@@ -482,7 +483,7 @@ def main():
     print("="*50)
 
     # 加载冻结的 VQVAE 模型
-    vqvae = VQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25).to(device)
+    vqvae = VQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, n_embeddings=args.n_embeddings, embedding_dim=args.embedding_dim, beta=0.25).to(device)
     vqvae.load_state_dict(torch.load(args.vqvae_model_path, map_location=device))
     vqvae.eval()
     print("Loaded frozen VQVAE model.")
@@ -531,12 +532,12 @@ def main():
     # 根据选择的潜向量来源加载相应的模型
     if args.latent_source == 'softvqvae':
         # 加载冻结的 SoftVQVAE 模型
-        model = SoftVQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, beta=0.25,temperature=0.5).to(device)
+        model = SoftVQVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=args.embedding_dim, beta=0.25,temperature=0.5).to(device)
         model.load_state_dict(torch.load(args.softvqvae_model_path, map_location=device))
         print("Loaded frozen SoftVQVAE model.")
     elif args.latent_source == 'ortho_vae':
         # 加载冻结的 OrthoVAE 模型
-        model = OrthoVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=64, ortho_weight=0.1, entropy_weight=0.1).to(device)
+        model = OrthoVAE(h_dim=128, res_h_dim=32, n_res_layers=2, num_embeddings=args.n_embeddings, embedding_dim=args.embedding_dim, entropy_weight=0.1, svb_epsilon=0.1).to(device)
         model.load_state_dict(torch.load(args.ortho_vae_model_path, map_location=device))
         print("Loaded frozen OrthoVAE model.")
     

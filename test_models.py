@@ -43,8 +43,8 @@ def test_models():
         n_res_layers=n_res_layers,
         num_embeddings=n_embeddings,
         embedding_dim=embedding_dim,
-        ortho_weight=ortho_weight,
-        entropy_weight=entropy_weight
+        entropy_weight=entropy_weight,
+        svb_epsilon=0.1
     ).to(device)
     
     # Test input
@@ -91,10 +91,9 @@ def test_models():
     print(f"OrthoVAE - Output shape: {x_hat.shape}")
     
     # Test forward pass with loss
-    total_loss, recon_loss, ortho_loss, entropy_loss, x_hat_loss = ortho_vae(x, return_loss=True)
+    total_loss, recon_loss, entropy_loss, x_hat_loss = ortho_vae(x, return_loss=True)
     print(f"OrthoVAE - Total loss: {total_loss.item():.4f}")
     print(f"OrthoVAE - Recon loss: {recon_loss.item():.4f}")
-    print(f"OrthoVAE - Orthogonal loss: {ortho_loss.item():.4f}")
     print(f"OrthoVAE - Entropy loss: {entropy_loss.item():.4f}")
     print(f"OrthoVAE - Output shapes match: {x_hat.shape == x_hat_loss.shape}")
     

@@ -52,15 +52,19 @@ def train_model(model, model_name, training_loader, validation_loader, x_train_v
             embedding_loss = codebook_loss
         elif isinstance(model, OrthoVAE):
             # For OrthoVAE with new interface
-            total_loss, recon_loss, ortho_loss, entropy_loss, _ = model(x, return_loss=True)
-            # For compatibility with existing code, set embedding_loss to ortho_loss
-            embedding_loss = ortho_loss + entropy_loss
+            total_loss, recon_loss, entropy_loss, _ = model(x, return_loss=True)
+            # For compatibility with existing code, set embedding_loss to entropy_loss
+            embedding_loss = entropy_loss
         else:
             # For VQVAE with original interface
             total_loss, recon_loss, embedding_loss, _, _ = model(x, return_loss=True)
         
         total_loss.backward()
         optimizer.step()
+        
+        # Apply SVB every 200 steps for OrthoVAE
+        if isinstance(model, OrthoVAE) and i % 200 == 0 and i > 0:
+            model.apply_svb()
         
         results["recon_errors"].append(recon_loss.cpu().detach().numpy())
         results["loss_vals"].append(total_loss.cpu().detach().numpy())
@@ -367,8 +371,8 @@ def main():
     parser.add_argument("--n_hiddens", type=int, default=128)
     parser.add_argument("--n_residual_hiddens", type=int, default=32)
     parser.add_argument("--n_residual_layers", type=int, default=2)
-    parser.add_argument("--embedding_dim", type=int, default=64)
-    parser.add_argument("--n_embeddings", type=int, default=512)
+    parser.add_argument("--embedding_dim", type=int, default=128)
+    parser.add_argument("--n_embeddings", type=int, default=64)
     parser.add_argument("--beta", type=float, default=0.25)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--log_interval", type=int, default=50)
@@ -429,8 +433,8 @@ def main():
             n_res_layers=args.n_residual_layers,
             num_embeddings=args.n_embeddings,
             embedding_dim=args.embedding_dim,
-            ortho_weight=0.1,
-            entropy_weight=0.1
+            entropy_weight=0.1,
+            svb_epsilon=0.1
         ).to(device)
     
     # Check if at least one model is selected
