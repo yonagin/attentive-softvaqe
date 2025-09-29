@@ -379,6 +379,8 @@ def main():
     parser.add_argument("--dataset", type=str, default='CIFAR10')
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--noise_std", type=float, default=0.0, help="Standard deviation of Gaussian noise to add to quantized latent vectors for SoftVQVAE")
+    parser.add_argument("--entropy_weight", type=float, default=0.25, help="Entropy weight for OrthoVAE")
+    parser.add_argument("--svb_epsilon", type=float, default=0.05, help="SVB epsilon for OrthoVAE")
     
     # Model selection parameters
     parser.add_argument("--train_vqvae", action="store_true", default=False, help="Train VQVAE model")
@@ -433,8 +435,8 @@ def main():
             n_res_layers=args.n_residual_layers,
             num_embeddings=args.n_embeddings,
             embedding_dim=args.embedding_dim,
-            entropy_weight=0.1,
-            svb_epsilon=0.1
+            entropy_weight=args.entropy_weight,
+            svb_epsilon=args.svb_epsilon
         ).to(device)
     
     # Check if at least one model is selected
