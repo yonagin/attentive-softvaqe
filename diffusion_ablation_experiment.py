@@ -205,7 +205,7 @@ def train_diffusion_model(latent_dataset, save_path, args):
         # 最多下采样一次
         down_blocks = ("DownBlock2D",)
         up_blocks = ("UpBlock2D",)
-        block_channels = (128,) # 减少层数，但可以增加宽度
+        block_channels = (256,) # 减少层数，但可以增加宽度
     else:
         # 默认配置
         down_blocks = ("DownBlock2D", "DownBlock2D")
@@ -335,6 +335,14 @@ def generate_with_diffusion(diffusion_pipeline, model, model_type, num_samples, 
     
     # 确保张量在正确的设备上
     generated_latents = generated_latents.to(device)
+    
+    # 检测并修复维度问题：DDPMPipeline可能生成通道在最后的张量
+    # 检查张量维度，如果最后一个维度等于embedding_dim，说明通道在最后
+    if generated_latents.dim() == 4 and generated_latents.shape[-1] == model.embedding_dim:
+        print(f"Detected channels-last format (shape: {generated_latents.shape}). Converting to channels-first...")
+        # 将 (batch_size, height, width, channels) 转换为 (batch_size, channels, height, width)
+        generated_latents = generated_latents.permute(0, 3, 1, 2).contiguous()
+        print(f"Converted to channels-first format (shape: {generated_latents.shape})")
     
     # 2. 如果存在标准化参数，进行逆标准化
     if mean is not None and std is not None:
